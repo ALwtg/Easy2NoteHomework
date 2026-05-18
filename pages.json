@@ -1,0 +1,77 @@
+{
+	"pages": [
+		{
+			"path": "pages/index/index",
+			"style": {
+				"navigationStyle": "custom",
+				"navigationBarTitleText": "记作业助手",
+				"navigationBarBackgroundColor": "#2979ff",
+				"navigationBarTextStyle": "white",
+				"backgroundColor": "#f4f7fb"
+			}
+		},
+		{
+			"path": "pages/record/record",
+			"style": {
+				"navigationStyle": "custom",
+				"navigationBarTitleText": "记录作业",
+				"navigationBarBackgroundColor": "#2979ff",
+				"navigationBarTextStyle": "white",
+				"backgroundColor": "#f4f7fb"
+			}
+		},
+		{
+			"path": "pages/view/view",
+			"style": {
+				"navigationStyle": "custom",
+				"navigationBarTitleText": "查看作业",
+				"navigationBarBackgroundColor": "#2979ff",
+				"navigationBarTextStyle": "white",
+				"backgroundColor": "#f4f7fb"
+			}
+		},
+		{
+			"path": "pages/settings/settings",
+			"style": {
+				"navigationStyle": "custom",
+				"navigationBarTitleText": "设置",
+				"navigationBarBackgroundColor": "#2979ff",
+				"navigationBarTextStyle": "white",
+				"backgroundColor": "#f4f7fb"
+			}
+		}
+	],
+	"globalStyle": {
+		"navigationBarTextStyle": "white",
+		"navigationBarTitleText": "记作业助手",
+		"navigationBarBackgroundColor": "#2979ff",
+		"backgroundColor": "#f4f7fb"
+	},
+	"tabBar": {
+		"color": "#999999",
+		"selectedColor": "#2979ff",
+		"borderStyle": "black",
+		"backgroundColor": "#ffffff",
+		"list": [
+			{
+				"pagePath": "pages/record/record",
+				"text": "记录作业",
+				"iconPath": "static/tab-record.png",
+				"selectedIconPath": "static/tab-record-active.png"
+			},
+			{
+				"pagePath": "pages/view/view",
+				"text": "查看作业",
+				"iconPath": "static/tab-view.png",
+				"selectedIconPath": "static/tab-view-active.png"
+			},
+			{
+				"pagePath": "pages/settings/settings",
+				"text": "设置",
+				"iconPath": "static/setting.png",
+				"selectedIconPath": "static/setting-active.png"
+			}
+		]
+	},
+	"uniIdRouter": {}
+}
