@@ -164,6 +164,8 @@ const PRELOAD_ICON_PATHS = [
 	'/static/stop.png',
 	'/static/tab-record-active.png',
 	'/static/tab-record.png',
+	'/static/tab-schedule-active.png',
+	'/static/tab-schedule.png',
 	'/static/tab-view-active.png',
 	'/static/tab-view.png'
 ]
@@ -260,6 +262,9 @@ export default {
 			})
 			uni.preloadPage({
 				url: '/pages/settings/settings'
+			})
+			uni.preloadPage({
+				url: '/pages/schedule/schedule'
 			})
 		},
 		createEmptyForm() {

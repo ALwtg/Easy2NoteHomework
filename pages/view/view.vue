@@ -252,6 +252,7 @@ export default {
 			editingId: '',
 			form: this.createEmptyForm(),
 			showImportForm: false,
+			showShareMenu: false,
 			importCode: '',
 			lastCopiedCode: '',
 			isTopCollapsed: false,

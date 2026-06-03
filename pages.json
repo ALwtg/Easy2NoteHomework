@@ -1,6 +1,16 @@
 {
 	"pages": [
 		{
+			"path": "pages/schedule/schedule",
+			"style": {
+				"navigationStyle": "custom",
+				"navigationBarTitleText": "课表",
+				"navigationBarBackgroundColor": "#2979ff",
+				"navigationBarTextStyle": "white",
+				"backgroundColor": "#f4f7fb"
+			}
+		},
+		{
 			"path": "pages/index/index",
 			"style": {
 				"navigationStyle": "custom",
@@ -39,6 +49,56 @@
 				"navigationBarTextStyle": "white",
 				"backgroundColor": "#f4f7fb"
 			}
+		},
+		{
+			"path": "pages/settings/reminder/reminder",
+			"style": {
+				"navigationStyle": "custom",
+				"navigationBarTitleText": "提醒设置",
+				"navigationBarBackgroundColor": "#2979ff",
+				"navigationBarTextStyle": "white",
+				"backgroundColor": "#f4f7fb"
+			}
+		},
+		{
+			"path": "pages/settings/semester/semester",
+			"style": {
+				"navigationStyle": "custom",
+				"navigationBarTitleText": "课表设置",
+				"navigationBarBackgroundColor": "#2979ff",
+				"navigationBarTextStyle": "white",
+				"backgroundColor": "#f4f7fb"
+			}
+		},
+		{
+			"path": "pages/settings/appearance/appearance",
+			"style": {
+				"navigationStyle": "custom",
+				"navigationBarTitleText": "课表外观",
+				"navigationBarBackgroundColor": "#2979ff",
+				"navigationBarTextStyle": "white",
+				"backgroundColor": "#f4f7fb"
+			}
+		},
+		{
+			"path": "pages/settings/subjects/subjects",
+			"style": {
+				"navigationStyle": "custom",
+				"navigationBarTitleText": "学科管理",
+				"navigationBarBackgroundColor": "#2979ff",
+				"navigationBarTextStyle": "white",
+				"backgroundColor": "#f4f7fb"
+			}
+		},
+		{
+			"path": "pages/settings/data/data",
+			"style": {
+				"navigationStyle": "custom",
+				"navigationBarTitleText": "数据清理",
+				"navigationBarBackgroundColor": "#2979ff",
+				"navigationBarTextStyle": "white",
+				"backgroundColor": "#f4f7fb"
+			}
 		}
 	],
 	"globalStyle": {
@@ -53,6 +113,12 @@
 		"borderStyle": "black",
 		"backgroundColor": "#ffffff",
 		"list": [
+			{
+				"pagePath": "pages/schedule/schedule",
+				"text": "课表",
+				"iconPath": "static/tab-schedule.png",
+				"selectedIconPath": "static/tab-schedule-active.png"
+			},
 			{
 				"pagePath": "pages/record/record",
 				"text": "记录作业",
