@@ -274,7 +274,7 @@ export function importScheduleFromZf({ onSuccess, onCancel, onError } = {}) {
 
 	function goHome() {
 		setTimeout(() => {
-			uni.switchTab({ url: '/pages/record/record' })
+			uni.switchTab({ url: '/pages/schedule/schedule' })
 		}, 120)
 	}
 

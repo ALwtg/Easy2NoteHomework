@@ -1,0 +1,106 @@
+# ==========================================
+# uni-app / HBuilderX 项目 .gitignore
+# ==========================================
+
+# ---------- 依赖 ----------
+node_modules/
+jspm_packages/
+.pnp
+.pnp.js
+.pnpm-store/
+
+# ---------- 构建产物 ----------
+# uni-app 编译输出目录（缓存 / 编译结果 / 发布包）
+unpackage/dist/
+unpackage/cache/
+unpackage/release/
+unpackage/.automator/
+unpackage/upload-tmp/
+
+# 通用前端构建产物
+dist/
+build/
+out/
+.tmp/
+.cache/
+
+# ---------- 日志 ----------
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ---------- 环境变量 / 本地配置 ----------
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ---------- 编辑器 / IDE ----------
+# HBuilderX
+.hbuilderx/
+unpackage/debug/
+unpackage/resources/
+
+# VSCode
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# JetBrains（WebStorm / IntelliJ）
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Sublime / Vim / Emacs
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+
+# ---------- 操作系统 ----------
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Linux
+*~
+.fuse_hidden*
+.Trash-*
+
+# ---------- 测试 / 覆盖率 ----------
+coverage/
+*.lcov
+.nyc_output/
+
+# ---------- 微信开发者工具 ----------
+project.private.config.json
+miniprogram_npm/
+
+# ---------- 其它临时文件 ----------
+*.bak
+*.tmp
+*.temp
+*.zip
+*.7z
+*.rar
+
+# ---------- 项目内部数据保留 ----------
+# 保留 .codebuddy 目录（项目相关数据，不应忽略）
+!.codebuddy/

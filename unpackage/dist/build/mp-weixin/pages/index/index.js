@@ -1,1 +1,0 @@
-"use strict";const e=require("../../common/vendor.js"),r={onLoad(){e.index.switchTab({url:"/pages/record/record"})}};const o=e._export_sfc(r,[["render",function(e,r,o,c,n,t){return{}}]]);wx.createPage(o);
