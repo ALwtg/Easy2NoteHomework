@@ -1,5 +1,5 @@
 <template>
-	<view class="page">
+	<view class="page" :style="kbStyle">
 		<view class="custom-nav">
 			<text class="nav-title">设置</text>
 		</view>
@@ -8,7 +8,7 @@
 			<view class="group-title">提醒与时间</view>
 			<view class="entry-item" hover-class="entry-item-hover" @click="goTo('reminder')">
 				<view class="entry-icon entry-icon-blue">
-					<text class="entry-emoji">🔔</text>
+					<image class="entry-img" src="/static/reminder.png" mode="aspectFit"></image>
 				</view>
 				<view class="entry-main">
 					<text class="entry-title">提醒设置</text>
@@ -18,7 +18,7 @@
 			</view>
 			<view class="entry-item" hover-class="entry-item-hover" @click="goTo('semester')">
 				<view class="entry-icon entry-icon-purple">
-					<text class="entry-emoji">📅</text>
+					<image class="entry-img" src="/static/semester.png" mode="aspectFit"></image>
 				</view>
 				<view class="entry-main">
 					<text class="entry-title">课表设置</text>
@@ -28,7 +28,7 @@
 			</view>
 			<view class="entry-item" hover-class="entry-item-hover" @click="goTo('appearance')">
 				<view class="entry-icon entry-icon-pink">
-					<text class="entry-emoji">🎨</text>
+					<image class="entry-img" src="/static/appearance.png" mode="aspectFit"></image>
 				</view>
 				<view class="entry-main">
 					<text class="entry-title">课表外观</text>
@@ -42,7 +42,7 @@
 			<view class="group-title">作业内容</view>
 			<view class="entry-item" hover-class="entry-item-hover" @click="goTo('subjects')">
 				<view class="entry-icon entry-icon-green">
-					<text class="entry-emoji">📚</text>
+					<image class="entry-img" src="/static/subjects.png" mode="aspectFit"></image>
 				</view>
 				<view class="entry-main">
 					<text class="entry-title">学科管理</text>
@@ -52,11 +52,25 @@
 			</view>
 			<view class="entry-item" hover-class="entry-item-hover" @click="goTo('data')">
 				<view class="entry-icon entry-icon-red">
-					<text class="entry-emoji">🧹</text>
+					<image class="entry-img" src="/static/data-clean.png" mode="aspectFit"></image>
 				</view>
 				<view class="entry-main">
 					<text class="entry-title">数据清理</text>
 					<text class="entry-desc">一键清除已完成作业</text>
+				</view>
+				<text class="entry-arrow">›</text>
+			</view>
+		</view>
+
+		<view class="group-card">
+			<view class="group-title">其他</view>
+			<view class="entry-item" hover-class="entry-item-hover" @click="goTo('about')">
+				<view class="entry-icon entry-icon-blue">
+					<image class="entry-img" src="/static/about.png" mode="aspectFit"></image>
+				</view>
+				<view class="entry-main">
+					<text class="entry-title">关于</text>
+					<text class="entry-desc">版本信息 · 交流群 · 检查更新</text>
 				</view>
 				<text class="entry-arrow">›</text>
 			</view>
@@ -74,7 +88,8 @@ const ROUTE_MAP = {
 	semester: '/pages/settings/semester/semester',
 	appearance: '/pages/settings/appearance/appearance',
 	subjects: '/pages/settings/subjects/subjects',
-	data: '/pages/settings/data/data'
+	data: '/pages/settings/data/data',
+	about: '/pages/settings/about/about'
 }
 
 export default {
@@ -91,7 +106,7 @@ export default {
 <style>
 .page {
 	min-height: 100vh;
-	padding: 28rpx 28rpx 120rpx;
+	padding: 28rpx 28rpx 40rpx;
 	box-sizing: border-box;
 	background: #f4f7fb;
 }
@@ -172,6 +187,11 @@ export default {
 
 .entry-emoji {
 	font-size: 38rpx;
+}
+
+.entry-img {
+	width: 44rpx;
+	height: 44rpx;
 }
 
 .entry-main {

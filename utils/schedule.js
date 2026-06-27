@@ -333,7 +333,10 @@ export const DEFAULT_APPEARANCE = {
 	// 背景图透明度（0-1，越小越透）
 	backgroundOpacity: 1,
 	// 课程卡片透明度（0.3-1，整体卡片含色块）
-	cardOpacity: 1
+	cardOpacity: 1,
+	// 重叠课程闪烁切换周期（每节课的总停留时长，含淡入淡出，单位 ms）
+	// 范围 1000-10000，步长 500
+	overlapBlinkCycleMs: 5000
 }
 
 export function loadAppearance() {
@@ -357,6 +360,14 @@ export function mergeAppearance(config) {
 	}
 	if (typeof config.cardOpacity === 'number' && config.cardOpacity >= 0.3 && config.cardOpacity <= 1) {
 		next.cardOpacity = round2(config.cardOpacity)
+	}
+	if (
+		typeof config.overlapBlinkCycleMs === 'number' &&
+		config.overlapBlinkCycleMs >= 1000 &&
+		config.overlapBlinkCycleMs <= 10000
+	) {
+		// 取整到 500ms 步长
+		next.overlapBlinkCycleMs = Math.round(config.overlapBlinkCycleMs / 500) * 500
 	}
 	return next
 }

@@ -99,6 +99,16 @@
 				"navigationBarTextStyle": "white",
 				"backgroundColor": "#f4f7fb"
 			}
+		},
+		{
+			"path": "pages/settings/about/about",
+			"style": {
+				"navigationStyle": "custom",
+				"navigationBarTitleText": "关于",
+				"navigationBarBackgroundColor": "#2979ff",
+				"navigationBarTextStyle": "white",
+				"backgroundColor": "#f4f7fb"
+			}
 		}
 	],
 	"globalStyle": {

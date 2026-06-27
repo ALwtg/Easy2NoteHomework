@@ -20,7 +20,8 @@
         "modules" : {
             "Camera" : {},
             "Record" : {},
-            "Share" : {}
+            "Share" : {},
+            "Barcode" : {}
         },
         /* 应用发布信息 */
         "distribute" : {

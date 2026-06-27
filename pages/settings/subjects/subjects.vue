@@ -1,5 +1,5 @@
 <template>
-	<view class="page">
+	<view class="page" :style="kbStyle">
 		<view class="custom-nav">
 			<view class="nav-back" @click="goBack">
 				<text class="nav-arrow">‹</text>
@@ -146,7 +146,7 @@ export default {
 <style>
 .page {
 	min-height: 100vh;
-	padding: 28rpx 28rpx 120rpx;
+	padding: 28rpx 28rpx 40rpx;
 	box-sizing: border-box;
 	background: #f4f7fb;
 }

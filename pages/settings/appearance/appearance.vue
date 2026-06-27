@@ -1,5 +1,5 @@
 <template>
-	<view class="page">
+	<view class="page" :style="kbStyle">
 		<view class="custom-nav">
 			<view class="nav-back" @click="goBack">
 				<text class="nav-arrow">‹</text>
@@ -54,6 +54,22 @@
 					show-value
 					activeColor="#2979ff"
 					@change="onCardOpacityChange"
+				/>
+			</view>
+
+			<view class="form-row form-row-block">
+				<view class="form-row-head">
+					<text class="form-label-strong">重叠课程切换时长</text>
+					<text class="form-value">{{ blinkCycleSecondsText }} 秒</text>
+				</view>
+				<text class="cell-desc">同一时段存在多门课时，按设定时长依次淡入/淡出循环显示。</text>
+				<slider
+					:value="blinkCycleTenth"
+					:min="10"
+					:max="100"
+					:step="5"
+					activeColor="#2979ff"
+					@change="onBlinkCycleChange"
 				/>
 			</view>
 		</view>
@@ -156,6 +172,15 @@ export default {
 		cardOpacityPercent() {
 			return Math.round(this.appearance.cardOpacity * 100)
 		},
+		blinkCycleTenth() {
+			// slider 以 0.1 秒为单位，范围 10~100（即 1.0s ~ 10.0s）
+			const ms = Number(this.appearance.overlapBlinkCycleMs) || 5000
+			return Math.round(ms / 100)
+		},
+		blinkCycleSecondsText() {
+			const ms = Number(this.appearance.overlapBlinkCycleMs) || 5000
+			return (ms / 1000).toFixed(1)
+		},
 		subjects() {
 			const map = new Map()
 			this.courses.forEach(course => {
@@ -240,6 +265,11 @@ export default {
 			const value = Number(event.detail.value) / 100
 			this.appearance = saveAppearance({ ...this.appearance, cardOpacity: value })
 		},
+		onBlinkCycleChange(event) {
+			// slider 值单位为 0.1 秒，× 100 还原为毫秒
+			const ms = Number(event.detail.value) * 100
+			this.appearance = saveAppearance({ ...this.appearance, overlapBlinkCycleMs: ms })
+		},
 		openColorPicker(item) {
 			this.pickerTarget = item
 			this.pickerColor = item.color
@@ -281,7 +311,7 @@ export default {
 <style>
 .page {
 	min-height: 100vh;
-	padding: 28rpx 28rpx 120rpx;
+	padding: 28rpx 28rpx 40rpx;
 	box-sizing: border-box;
 	background: #f4f7fb;
 }

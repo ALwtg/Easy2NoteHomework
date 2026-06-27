@@ -1,5 +1,5 @@
 <template>
-	<view class="page">
+	<view class="page" :style="kbStyle">
 		<view class="custom-nav">
 			<view class="nav-back" @click="goBack">
 				<text class="nav-arrow">‹</text>
@@ -19,6 +19,20 @@
 						<view class="picker-box">{{ semesterStart || '选择开学日期' }}</view>
 					</picker>
 					<button v-if="semesterStart" class="ghost-btn" @click="clearSemesterStart">清除</button>
+				</view>
+			</view>
+		</view>
+
+		<view class="card">
+			<view class="switch-row" @click="toggleClearManual">
+				<view class="cell-main">
+					<text class="cell-title">重新导入清除手动课</text>
+					<text class="cell-desc">开启后从教务系统或分享码重新导入时，会清除你手动添加的课程；关闭则保留</text>
+				</view>
+				<view :class="['manual-toggle', clearManualOnImport ? 'is-on' : '']">
+					<view class="manual-toggle-track">
+						<view class="manual-toggle-thumb"></view>
+					</view>
 				</view>
 			</view>
 		</view>
@@ -114,6 +128,8 @@ import {
 	savePeriodConfig,
 	buildPeriodTimes,
 	mergePeriodConfig,
+	loadClearManualOnImport,
+	saveClearManualOnImport,
 	DEFAULT_PERIOD_CONFIG
 } from '@/utils/schedule.js'
 
@@ -135,7 +151,8 @@ export default {
 	data() {
 		return {
 			semesterStart: '',
-			form: toForm(DEFAULT_PERIOD_CONFIG)
+			form: toForm(DEFAULT_PERIOD_CONFIG),
+			clearManualOnImport: false
 		}
 	},
 	computed: {
@@ -155,10 +172,20 @@ export default {
 	onShow() {
 		this.semesterStart = loadSemesterStartDate()
 		this.form = toForm(loadPeriodConfig())
+		this.clearManualOnImport = loadClearManualOnImport()
 	},
 	methods: {
 		goBack() {
 			uni.navigateBack({ delta: 1 })
+		},
+		toggleClearManual() {
+			const next = !this.clearManualOnImport
+			this.clearManualOnImport = next
+			saveClearManualOnImport(next)
+			uni.showToast({
+				title: next ? '已开启：重新导入会清除手动课' : '已关闭：手动课会保留',
+				icon: 'none'
+			})
 		},
 		onSemesterStartChange(event) {
 			const value = event.detail.value || ''
@@ -240,7 +267,7 @@ export default {
 <style>
 .page {
 	min-height: 100vh;
-	padding: 28rpx 28rpx 120rpx;
+	padding: 28rpx 28rpx 40rpx;
 	box-sizing: border-box;
 	background: #f4f7fb;
 }
@@ -468,5 +495,50 @@ export default {
 	text-align: center;
 	font-size: 24rpx;
 	color: #9ca3af;
+}
+
+.switch-row {
+	display: flex;
+	align-items: center;
+	gap: 24rpx;
+	padding: 8rpx 0;
+}
+
+.switch-row .cell-main {
+	flex: 1;
+	min-width: 0;
+}
+
+.manual-toggle {
+	flex-shrink: 0;
+}
+
+.manual-toggle-track {
+	position: relative;
+	width: 76rpx;
+	height: 42rpx;
+	border-radius: 999rpx;
+	background: #d1d5db;
+	transition: background 0.18s ease;
+}
+
+.manual-toggle-thumb {
+	position: absolute;
+	top: 4rpx;
+	left: 4rpx;
+	width: 34rpx;
+	height: 34rpx;
+	border-radius: 50%;
+	background: #ffffff;
+	box-shadow: 0 2rpx 6rpx rgba(15, 23, 42, 0.2);
+	transition: left 0.18s ease;
+}
+
+.manual-toggle.is-on .manual-toggle-track {
+	background: #2979ff;
+}
+
+.manual-toggle.is-on .manual-toggle-thumb {
+	left: 38rpx;
 }
 </style>

@@ -1,5 +1,5 @@
 <template>
-	<view class="page" @touchstart="onPageTouchStart" @touchmove="onPageTouchMove" @touchend="onPageTouchEnd" @touchcancel="onPageTouchEnd">
+	<view class="page" :style="kbStyle" @touchstart="onPageTouchStart" @touchmove="onPageTouchMove" @touchend="onPageTouchEnd" @touchcancel="onPageTouchEnd">
 		<view :class="['top-panel', isTopCollapsed ? 'is-collapsed' : '']">
 			<view class="collapsed-bar" @click="expandTopPanel">
 				<image class="expand-icon" src="/static/more.png" mode="aspectFit"></image>
@@ -8,14 +8,9 @@
 
 			<view class="custom-nav">
 				<text class="nav-title">查看作业</text>
-				<view class="nav-share-wrap">
-					<button class="nav-share-btn" @click="showShareMenu = !showShareMenu">分享</button>
-					<view v-if="showShareMenu" class="share-menu">
-						<text class="share-menu-tip">选择分享方式</text>
-						<button class="share-menu-item primary" open-type="share" @click="showShareMenu = false">微信分享</button>
-						<button class="share-menu-item" @click="copyShareCode">复制分享码</button>
-						<button class="share-menu-item" @click="openImportForm">导入分享码</button>
-					</view>
+				<view class="nav-actions">
+					<button class="nav-action-btn import-btn" @click="toggleImportMenu">导入</button>
+					<button class="nav-action-btn share-btn" @click="toggleShareMenu">分享</button>
 				</view>
 			</view>
 
@@ -27,6 +22,7 @@
 				<textarea class="import-textarea" v-model="importCode" placeholder="粘贴好友的分享码" maxlength="10000" />
 				<view class="import-btns">
 					<button class="paste-btn" @click="pasteFromClipboard">从剪贴板导入</button>
+					<button class="paste-btn" @click="importFromFile">从文件读取</button>
 					<button class="save-btn" @click="manualImport">导入作业</button>
 				</view>
 			</view>
@@ -64,6 +60,22 @@
 					</view>
 				</scroll-view>
 			</view>
+		</view>
+
+		<view v-if="showShareMenu || showImportMenu" class="menu-mask" @click="closeMenus"></view>
+
+		<view v-if="showShareMenu" class="floating-menu share-menu" @click.stop>
+			<text class="floating-menu-tip">选择分享方式</text>
+			<button class="floating-menu-item primary" open-type="share" @click="showShareMenu = false">微信分享</button>
+			<button class="floating-menu-item" @click="copyShareCode">复制分享码</button>
+			<button class="floating-menu-item" @click="exportShareFile">导出为文件</button>
+
+		</view>
+
+		<view v-if="showImportMenu" class="floating-menu import-menu" @click.stop>
+			<text class="floating-menu-tip">选择导入方式</text>
+			<button class="floating-menu-item primary" @click="openImportForm">导入分享码</button>
+
 		</view>
 
 		<view class="section-title-row">
@@ -219,6 +231,7 @@ import {
 	checkAndSetReminders,
 	resetNotificationStatus
 } from '@/utils/notification.js'
+import { exportTextAsFile, pickAndReadTextFile } from '@/utils/shareFile.js'
 
 const HOMEWORK_KEY = 'homework_list'
 const SUBJECT_KEY = 'subject_list'
@@ -253,6 +266,7 @@ export default {
 			form: this.createEmptyForm(),
 			showImportForm: false,
 			showShareMenu: false,
+			showImportMenu: false,
 			importCode: '',
 			lastCopiedCode: '',
 			isTopCollapsed: false,
@@ -366,7 +380,7 @@ export default {
 			imageUrl: '/static/logo.png'
 		}
 	},
-	onShow() {
+		onShow() {
 		this.loadHomework()
 		this.checkHomeworkReminders()
 		this.playCardEnterAnimation()
@@ -421,7 +435,20 @@ export default {
 		},
 		openImportForm() {
 			this.showShareMenu = false
+			this.showImportMenu = false
 			this.showImportForm = true
+		},
+		toggleShareMenu() {
+			this.showImportMenu = false
+			this.showShareMenu = !this.showShareMenu
+		},
+		toggleImportMenu() {
+			this.showShareMenu = false
+			this.showImportMenu = !this.showImportMenu
+		},
+		closeMenus() {
+			this.showShareMenu = false
+			this.showImportMenu = false
 		},
 		checkHomeworkReminders() {
 			checkAndSetReminders(this.homeworkList)
@@ -711,10 +738,14 @@ export default {
 		},
 		safeDecodeShareCode(code) {
 			const raw = `${code || ''}`.trim()
+			// 允许从带提示语的整段文字中提取分享码
+			let candidate = raw
+			const m = raw.match(/%7B[%0-9A-Za-z\-_.~!*'();:@&=+$,/?#\[\]"\\]+/)
+			if (m && m[0]) candidate = m[0]
 			try {
-				return decodeURIComponent(raw)
+				return decodeURIComponent(candidate)
 			} catch (e) {
-				return raw
+				return candidate
 			}
 		},
 		createShareableHomework(item) {
@@ -786,11 +817,70 @@ export default {
 			uni.setClipboardData({
 				data: shareCode,
 				success: () => {
-					this.showShareMenu = false
+					this.closeMenus()
 					this.lastCopiedCode = shareCode
 					uni.showToast({ title: '分享码已复制', icon: 'success' })
 				}
 			})
+		},
+
+		async exportShareFile() {
+			this.closeMenus()
+			if (!this.homeworkList.length) {
+				uni.showToast({ title: '当前还没有作业', icon: 'none' })
+				return
+			}
+			try {
+				const shareCode = this.buildShareCode()
+				const text = `【作业分享码】请在作业助手中粘贴或选择文件导入：\n${shareCode}`
+				const filename = `homework_${this.formatStamp(new Date())}.txt`
+				uni.showLoading({ title: '准备分享...' })
+				const res = await exportTextAsFile(text, filename, 'text/plain')
+				uni.hideLoading()
+				if (res && res.method === 'clipboard') {
+					uni.showToast({ title: '已复制分享内容到剪切板', icon: 'success' })
+				} else if (res && res.method === 'download') {
+					uni.showToast({ title: '已下载分享文件', icon: 'success' })
+				} else {
+					uni.showToast({ title: '请选择要分享到的应用', icon: 'none' })
+				}
+			} catch (e) {
+				uni.hideLoading()
+				uni.showModal({
+					title: '导出失败',
+					content: (e && e.message) || '请重试',
+					showCancel: false
+				})
+			}
+		},
+		async importFromFile() {
+			try {
+				const res = await pickAndReadTextFile({ extensions: ['txt', 'json'] })
+				const content = (res && res.content) || ''
+				if (!content) {
+					uni.showToast({ title: '文件内容为空', icon: 'none' })
+					return
+				}
+				if (this.isValidShareCode(content)) {
+					this.importShareCode(content)
+				} else {
+					this.importCode = content
+					uni.showToast({ title: '已读取文件，请确认分享码', icon: 'none' })
+				}
+			} catch (e) {
+				const msg = (e && e.message) || ''
+				if (msg && !/cancel|取消|未选择/i.test(msg)) {
+					uni.showToast({ title: msg, icon: 'none' })
+				}
+			}
+		},
+		formatStamp(date) {
+			const y = date.getFullYear()
+			const m = `${date.getMonth() + 1}`.padStart(2, '0')
+			const d = `${date.getDate()}`.padStart(2, '0')
+			const h = `${date.getHours()}`.padStart(2, '0')
+			const mi = `${date.getMinutes()}`.padStart(2, '0')
+			return `${y}${m}${d}_${h}${mi}`
 		},
 		isValidShareCode(code) {
 			try {
@@ -1176,7 +1266,6 @@ export default {
 	padding: 28rpx 28rpx 60rpx;
 	box-sizing: border-box;
 	background: #f4f7fb;
-	padding-bottom: 120rpx;
 }
 
 .top-panel {
@@ -1261,38 +1350,66 @@ export default {
 	color: #2563eb;
 }
 
-.nav-share-wrap {
+.nav-actions {
 	position: absolute;
 	top: 42rpx;
 	right: 0;
+	display: flex;
+	gap: 14rpx;
 	z-index: 20;
 }
 
-.nav-share-btn {
-	width: 88rpx;
+.nav-action-btn {
+	min-width: 88rpx;
 	height: 56rpx;
 	line-height: 56rpx;
 	margin: 0;
-	padding: 0;
+	padding: 0 22rpx;
 	border-radius: 999rpx;
-	background: #eef2ff;
-	color: #3155d4;
 	font-size: 24rpx;
 	font-weight: 700;
 }
 
-.share-menu {
-	position: absolute;
-	top: 72rpx;
+.nav-action-btn.share-btn {
+	background: #eef2ff;
+	color: #3155d4;
+}
+
+.nav-action-btn.import-btn {
+	background: #ecfdf5;
+	color: #047857;
+}
+
+.menu-mask {
+	position: fixed;
+	left: 0;
 	right: 0;
-	width: 260rpx;
+	top: 0;
+	bottom: 0;
+	z-index: 998;
+	background: transparent;
+}
+
+.floating-menu {
+	position: fixed;
+	top: 116rpx;
+	width: 280rpx;
 	padding: 18rpx;
 	border-radius: 24rpx;
 	background: #ffffff;
-	box-shadow: 0 16rpx 42rpx rgba(31, 45, 61, 0.16);
+	box-shadow: 0 16rpx 42rpx rgba(31, 45, 61, 0.18);
+	z-index: 999;
 }
 
-.share-menu::before {
+.floating-menu.share-menu {
+	right: 28rpx;
+}
+
+.floating-menu.import-menu {
+	right: 130rpx;
+}
+
+.floating-menu::before {
 	content: '';
 	position: absolute;
 	top: -10rpx;
@@ -1303,7 +1420,11 @@ export default {
 	transform: rotate(45deg);
 }
 
-.share-menu-tip {
+.floating-menu.import-menu::before {
+	right: 26rpx;
+}
+
+.floating-menu-tip {
 	display: block;
 	margin-bottom: 12rpx;
 	font-size: 22rpx;
@@ -1311,7 +1432,7 @@ export default {
 	text-align: left;
 }
 
-.share-menu-item {
+.floating-menu-item {
 	width: 100%;
 	height: 64rpx;
 	line-height: 64rpx;
@@ -1325,7 +1446,7 @@ export default {
 	text-align: center;
 }
 
-.share-menu-item.primary {
+.floating-menu-item.primary {
 	background: #2563eb;
 	color: #ffffff;
 }
@@ -1356,14 +1477,15 @@ export default {
 .import-btns .save-btn {
 	flex: 1;
 	margin-top: 0;
+	font-size: 24rpx;
 }
 
 .paste-btn {
-	padding: 20rpx;
+	padding: 20rpx 12rpx;
 	border-radius: 18rpx;
 	background: #f0f9ff;
 	color: #2563eb;
-	font-size: 28rpx;
+	font-size: 24rpx;
 	font-weight: 500;
 	text-align: center;
 	border: 2rpx solid #bfdbfe;

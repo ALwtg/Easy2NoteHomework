@@ -1,5 +1,5 @@
 <template>
-	<view class="page">
+	<view class="page" :style="kbStyle">
 		<view class="custom-nav">
 			<text class="nav-title">记录作业</text>
 		</view>
