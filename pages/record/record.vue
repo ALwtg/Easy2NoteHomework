@@ -35,7 +35,7 @@
 				<view :class="['voice-btn', isRecording ? 'recording' : '']" @click="toggleVoiceRecord">
 					<image class="bar-icon" :src="isRecording ? '/static/stop.png' : '/static/audio.png'" mode="aspectFit"></image>
 				</view>
-				<textarea class="message-input" v-model="form.note" :style="messageInputStyle" :placeholder="isRecording ? '正在录音，再点一次停止...' : '文字记录'" maxlength="200" :auto-height="false" :show-confirm-bar="false" @focus="inputFocused = true" @blur="inputFocused = false" />
+				<textarea class="message-input" v-model="form.note" :style="messageInputStyle" :placeholder="isRecording ? '正在录音，再点一次停止...' : '文字记录'" :auto-height="false" :show-confirm-bar="false" @focus="inputFocused = true" @blur="inputFocused = false" />
 				<view class="right-actions">
 					<view class="bar-camera" @click="hasAttachment || form.note.trim() ? chooseImage() : takePhoto()">
 						<image v-if="!hasAttachment && !form.note.trim()" class="bar-icon camera-bar-icon" src="/static/camera.png" mode="aspectFit"></image>
@@ -118,18 +118,22 @@
 						</picker>
 					</view>
 				</view>
+				<text v-if="form.deadlineTip" class="auto-tip">{{ form.deadlineTip }}</text>
 
 				<view class="field">
 					<text class="label">提醒时间</text>
 					<view class="reminder-row">
-						<input class="reminder-input" type="number" v-model="form.reminderOffsetHours" placeholder="23" maxlength="3" />
-						<text class="reminder-unit">截止前小时提醒</text>
+						<input class="reminder-input" type="number" v-model="form.reminderOffsetHours" :placeholder="form.reminderMode === 'smart' ? '1' : '23'" maxlength="3" @input="onReminderOffsetChange('reminderOffsetHours', $event)" />
+						<text class="reminder-unit">{{ form.reminderMode === 'smart' ? '小时' : '截止前小时提醒' }}</text>
+						<input v-if="form.reminderMode === 'smart'" class="reminder-input minute" type="number" v-model="form.reminderOffsetMinutes" placeholder="0" maxlength="2" @input="onReminderOffsetChange('reminderOffsetMinutes', $event)" />
+						<text v-if="form.reminderMode === 'smart'" class="reminder-unit minute">分钟前提醒</text>
 					</view>
+					<text v-if="form.reminderTip" class="auto-tip">{{ form.reminderTip }}</text>
 				</view>
 
 				<view class="field">
 					<text class="label">{{ hasAttachment ? '备注' : '作业内容' }}</text>
-					<textarea class="note" v-model="form.note" :placeholder="hasAttachment ? '例如：第 3 章习题、需要提交实验报告' : '请输入老师布置的作业内容'" maxlength="200" />
+					<textarea class="note" v-model="form.note" :placeholder="hasAttachment ? '例如：第 3 章习题、需要提交实验报告' : '请输入老师布置的作业内容'" />
 				</view>
 
 				<button class="save-btn" @click="saveHomework">{{ editingId ? '保存修改' : (hasAttachment ? '保存到看板' : '保存文字作业') }}</button>
@@ -142,16 +146,28 @@
 import { 
 	requestNotificationPermission, 
 	setHomeworkReminder, 
-	resetNotificationStatus
+	resetNotificationStatus,
+	getReminderMode,
+	getSmartReminderOffsetMinutes,
+	REMINDER_MODE_SMART
 } from '@/utils/notification.js'
+import {
+	loadCourses,
+	loadPeriodConfig,
+	buildPeriodTimes,
+	findCurrentOrRecentCourse,
+	findNextCourse,
+	findNextCourseForSubject,
+	findCourseAtDeadline,
+	formatCoursePoint
+} from '@/utils/schedule.js'
+import { loadSubjects, saveSubjects } from '@/utils/subjects.js'
 
 const HOMEWORK_KEY = 'homework_list'
-const SUBJECT_KEY = 'subject_list'
 const DEFAULT_DEADLINE_OFFSET_KEY = 'default_deadline_offset_hours'
 const DEFAULT_DEADLINE_OFFSET_HOURS = 24
 const DEFAULT_REMINDER_OFFSET_KEY = 'default_reminder_offset_hours'
 const DEFAULT_REMINDER_OFFSET_HOURS = 23
-const DEFAULT_SUBJECTS = ['高等数学', '大学英语', '程序设计', '数据结构', '线性代数']
 const PRELOAD_ICON_PATHS = [
 	'/static/audio.png',
 	'/static/camera.png',
@@ -187,6 +203,8 @@ export default {
 			recordCanceled: false,
 			recordStartTime: 0,
 			recorderManager: null,
+			// 录音超时看门狗：防止 onStop 回调不触发导致卡死
+			recordWatchdogTimer: null,
 			form: this.createEmptyForm()
 		}
 	},
@@ -226,6 +244,7 @@ export default {
 		this.loadHomework()
 	},
 	onUnload() {
+		this.clearRecordWatchdog()
 		if (this.isRecording) {
 			this.cancelVoiceRecord()
 		}
@@ -274,6 +293,11 @@ export default {
 				deadlineDate: this.formatDate(deadline),
 				deadlineTime: this.formatTime(deadline),
 				reminderOffsetHours: `${this.getDefaultReminderOffsetHours()}`,
+				reminderMode: getReminderMode(),
+				reminderAt: '',
+				reminderOffsetMinutes: 0,
+				deadlineTip: '',
+				reminderTip: '',
 				imagePaths: [],
 				audios: [],
 				imagePath: '',
@@ -281,6 +305,41 @@ export default {
 				audioDuration: 0,
 				note: ''
 			}
+		},
+		applyScheduleDefaultsToForm(form) {
+			const next = { ...form }
+			const courses = loadCourses()
+			const periodTimes = buildPeriodTimes(loadPeriodConfig())
+			const currentInfo = findCurrentOrRecentCourse({ courses, periodTimes, recentMinutes: 20 })
+			const baseCourse = currentInfo && currentInfo.course
+			if (baseCourse && baseCourse.subject) {
+				next.subject = baseCourse.subject
+			}
+
+			const subjectNextCourse = next.subject ? findNextCourseForSubject(next.subject, { courses, periodTimes }) : null
+			const nextCourse = subjectNextCourse || findNextCourse({ courses, periodTimes })
+			if (nextCourse && nextCourse.startAt) {
+				next.deadlineDate = this.formatDate(nextCourse.startAt)
+				next.deadlineTime = this.formatTime(nextCourse.startAt)
+				next.deadlineTip = `已按${formatCoursePoint(nextCourse)}设置截止时间`
+			}
+
+			const mode = getReminderMode()
+			next.reminderMode = mode
+			if (mode === REMINDER_MODE_SMART && nextCourse && nextCourse.startAt) {
+				const offsetMinutes = getSmartReminderOffsetMinutes()
+				const reminderAt = new Date(nextCourse.startAt.getTime() - offsetMinutes * 60 * 1000)
+				next.reminderOffsetHours = `${Math.floor(offsetMinutes / 60)}`
+				next.reminderOffsetMinutes = offsetMinutes % 60
+				next.reminderAt = reminderAt.toISOString()
+				next.reminderTip = `将在${formatCoursePoint(nextCourse)}开始前 ${Math.floor(offsetMinutes / 60)}小时${offsetMinutes % 60}分钟提醒`
+			} else {
+				next.reminderOffsetHours = `${this.getDefaultReminderOffsetHours()}`
+				next.reminderOffsetMinutes = 0
+				next.reminderAt = ''
+				next.reminderTip = ''
+			}
+			return next
 		},
 		logAudioRecord(step, detail = {}) {
 			console.log(`[作业助手][录音] ${step}`, {
@@ -311,6 +370,29 @@ export default {
 			this.recordStartTime = 0
 			this.logAudioRecord('录音运行状态已重置', { reason })
 		},
+		// === 录音超时看门狗 ===
+		// 启动看门狗：超时时间 = max(录音时长 * 2, 5s)，超时强制重置
+		startRecordWatchdog() {
+			this.clearRecordWatchdog()
+			const elapsed = this.recordStartTime ? Date.now() - this.recordStartTime : 0
+			const timeout = Math.max(elapsed * 2, 5000)
+			this.logAudioRecord('启动录音看门狗', { elapsed, timeout })
+			this.recordWatchdogTimer = setTimeout(() => {
+				this.recordWatchdogTimer = null
+				if (this.isRecordStopping) {
+					this.logAudioRecord('录音看门狗超时，强制重置', { elapsed, timeout })
+					this.resetRecordingUiState('watchdog timeout')
+					this.resetRecordingRuntimeState('watchdog timeout')
+					uni.showToast({ title: '录音处理超时，已重置', icon: 'none' })
+				}
+			}, timeout)
+		},
+		clearRecordWatchdog() {
+			if (this.recordWatchdogTimer) {
+				clearTimeout(this.recordWatchdogTimer)
+				this.recordWatchdogTimer = null
+			}
+		},
 		initRecorder() {
 			if (this.recorderManager) {
 				this.logAudioRecord('录音管理器已存在，跳过重复初始化')
@@ -327,23 +409,24 @@ export default {
 			this.recorderManager.onStart(() => {
 				this.logAudioRecord('录音开始回调触发')
 			})
-			this.recorderManager.onStop(async res => {
-				const rawDurationMs = Number((res && res.duration) || 0)
-				const elapsedMs = this.recordStartTime ? Date.now() - this.recordStartTime : 0
-				const durationMs = rawDurationMs || elapsedMs
-				const duration = Math.ceil(durationMs / 1000)
-				const canceled = this.recordCanceled
+		this.recorderManager.onStop(async res => {
+			this.clearRecordWatchdog()
+			const rawDurationMs = Number((res && res.duration) || 0)
+			const elapsedMs = this.recordStartTime ? Date.now() - this.recordStartTime : 0
+			const durationMs = rawDurationMs || elapsedMs
+			const duration = Math.ceil(durationMs / 1000)
+			const canceled = this.recordCanceled
 
-				this.logAudioRecord('录音停止回调触发', {
-					res,
-					rawDurationMs,
-					elapsedMs,
-					durationMs,
-					duration,
-					canceled,
-					tempFilePath: res && res.tempFilePath
-				})
-				this.resetRecordingUiState('onStop')
+			this.logAudioRecord('录音停止回调触发', {
+				res,
+				rawDurationMs,
+				elapsedMs,
+				durationMs,
+				duration,
+				canceled,
+				tempFilePath: res && res.tempFilePath
+			})
+			this.resetRecordingUiState('onStop')
 
 				if (canceled) {
 					this.resetRecordingRuntimeState('onStop canceled')
@@ -372,12 +455,13 @@ export default {
 					uni.showToast({ title: '录音保存失败，请重试', icon: 'none' })
 				}
 			})
-			this.recorderManager.onError(err => {
-				this.logAudioRecord('录音错误回调触发', { err })
-				this.resetRecordingUiState('onError')
-				this.resetRecordingRuntimeState('onError')
-				uni.showToast({ title: '录音失败，请重试', icon: 'none' })
-			})
+		this.recorderManager.onError(err => {
+			this.clearRecordWatchdog()
+			this.logAudioRecord('录音错误回调触发', { err })
+			this.resetRecordingUiState('onError')
+			this.resetRecordingRuntimeState('onError')
+			uni.showToast({ title: '录音失败，请重试', icon: 'none' })
+		})
 		},
 		startVoiceRecord() {
 			this.initRecorder()
@@ -428,6 +512,8 @@ export default {
 			this.resetRecordingUiState('stopVoiceRecord immediate')
 			try {
 				this.recorderManager.stop()
+				// 启动看门狗：若 onStop 未及时回调则强制重置
+				this.startRecordWatchdog()
 			} catch (e) {
 				this.logAudioRecord('调用 recorderManager.stop 抛出异常', { error: e })
 				this.resetRecordingUiState('stop exception')
@@ -456,6 +542,7 @@ export default {
 				this.resetRecordingUiState('cancelVoiceRecord immediate')
 				try {
 					this.recorderManager.stop()
+					this.startRecordWatchdog()
 				} catch (e) {
 					this.logAudioRecord('取消录音时 stop 抛出异常', { error: e })
 					this.resetRecordingUiState('cancel exception')
@@ -524,25 +611,14 @@ export default {
 			uni.showToast({ title: '录音已添加', icon: 'success' })
 		},
 		loadSubjects() {
-			const saved = uni.getStorageSync(SUBJECT_KEY)
-			if (Array.isArray(saved) && saved.length) {
-				this.subjectList = saved
-				return
-			}
-
-			this.subjectList = DEFAULT_SUBJECTS.map(name => ({
-				id: this.createId(),
-				name,
-				createdAt: new Date().toISOString()
-			}))
-			this.saveSubjects()
+			this.subjectList = loadSubjects()
 		},
 		loadHomework() {
 			const saved = uni.getStorageSync(HOMEWORK_KEY)
 			this.homeworkList = Array.isArray(saved) ? saved : []
 		},
 		saveSubjects() {
-			uni.setStorageSync(SUBJECT_KEY, this.subjectList)
+			saveSubjects(this.subjectList)
 		},
 		saveHomeworkList() {
 			uni.setStorageSync(HOMEWORK_KEY, this.homeworkList)
@@ -554,7 +630,7 @@ export default {
 				success: res => {
 					this.form.imagePaths = this.form.imagePaths.concat(res.tempFilePaths || [])
 					this.syncLegacyAttachmentFields()
-					this.form.subject = this.subjectNames[0] || ''
+					this.form = this.applyScheduleDefaultsToForm(this.form)
 					this.showPhotoAction = true
 				},
 				fail: () => {
@@ -614,18 +690,73 @@ export default {
 				uni.showToast({ title: '请输入作业内容或添加附件', icon: 'none' })
 				return
 			}
-			this.form.subject = this.subjectNames[0] || ''
+			this.form = this.applyScheduleDefaultsToForm(this.form)
 			this.showPhotoAction = false
 			this.showForm = true
 		},
+		updateReminderTipByCourse(courseInfo) {
+			const mode = this.form.reminderMode || getReminderMode()
+			this.form.reminderMode = mode
+			if (mode !== REMINDER_MODE_SMART || !courseInfo || !courseInfo.startAt) {
+				this.form.reminderAt = ''
+				this.form.reminderTip = ''
+				return
+			}
+
+			const offsetMinutes = Number(this.form.reminderOffsetHours || 0) * 60 + Number(this.form.reminderOffsetMinutes || 0)
+			if (!Number.isFinite(offsetMinutes) || offsetMinutes <= 0) {
+				this.form.reminderAt = ''
+				this.form.reminderTip = ''
+				return
+			}
+
+			const reminderAt = new Date(courseInfo.startAt.getTime() - offsetMinutes * 60 * 1000)
+			this.form.reminderAt = reminderAt.toISOString()
+			this.form.reminderTip = `将在${formatCoursePoint(courseInfo)}开始前 ${Math.floor(offsetMinutes / 60)}小时${offsetMinutes % 60}分钟提醒`
+		},
+		syncCourseTips(courseInfo, deadlineTip) {
+			this.form.deadlineTip = deadlineTip
+			this.updateReminderTipByCourse(courseInfo)
+		},
 		onSubjectChange(event) {
 			this.form.subject = this.subjectNames[event.detail.value]
+			this.updateDeadlineBySubject()
+		},
+		updateDeadlineBySubject() {
+			const subject = this.form.subject
+			if (!subject) return false
+			const courses = loadCourses()
+			const periodTimes = buildPeriodTimes(loadPeriodConfig())
+			const nextInfo = findNextCourseForSubject(subject, { courses, periodTimes })
+			if (nextInfo && nextInfo.startAt) {
+				this.form.deadlineDate = this.formatDate(nextInfo.startAt)
+				this.form.deadlineTime = this.formatTime(nextInfo.startAt)
+				this.syncCourseTips(nextInfo, `已按${formatCoursePoint(nextInfo)}设置截止时间`)
+				return true
+			}
+			this.syncCourseTips(null, '课表中未找到该学科的下一次上课时间')
+			return false
+		},
+		updateDeadlineTipByDateTime() {
+			const courseInfo = findCourseAtDeadline(this.form.deadlineDate, this.form.deadlineTime)
+			if (courseInfo && courseInfo.course) {
+				this.syncCourseTips(courseInfo, `截止时间对应：${formatCoursePoint(courseInfo)}`)
+			} else {
+				this.syncCourseTips(null, '该时间无对应课程')
+			}
+		},
+		onReminderOffsetChange(field, event) {
+			this.form[field] = event.detail.value
+			const courseInfo = findCourseAtDeadline(this.form.deadlineDate, this.form.deadlineTime)
+			this.updateReminderTipByCourse(courseInfo && courseInfo.course ? courseInfo : null)
 		},
 		onDateChange(event) {
 			this.form.deadlineDate = event.detail.value
+			this.updateDeadlineTipByDateTime()
 		},
 		onTimeChange(event) {
 			this.form.deadlineTime = event.detail.value
+			this.updateDeadlineTipByDateTime()
 		},
 		addSubject() {
 			const name = this.newSubjectName.trim()
@@ -646,6 +777,7 @@ export default {
 
 			this.form.subject = name
 			this.newSubjectName = ''
+			this.updateDeadlineBySubject()
 			uni.showToast({ title: exists ? '已选择该学科' : '学科已新建', icon: 'none' })
 		},
 		async saveHomework() {
@@ -663,10 +795,21 @@ export default {
 			}
 
 			const deadline = `${this.form.deadlineDate}T${this.form.deadlineTime}:00`
+			const reminderMode = this.form.reminderMode || getReminderMode()
 			const reminderOffsetHours = Number(this.form.reminderOffsetHours)
-			if (!Number.isInteger(reminderOffsetHours) || reminderOffsetHours <= 0 || reminderOffsetHours > 168) {
-				uni.showToast({ title: '提醒时间需为 1-168 小时', icon: 'none' })
+			const reminderOffsetMinutes = Number(this.form.reminderOffsetMinutes || 0)
+			if (!Number.isInteger(reminderOffsetHours) || reminderOffsetHours < 0 || reminderOffsetHours > 168) {
+				uni.showToast({ title: '提醒小时需为 0-168', icon: 'none' })
 				return
+			}
+			if (!Number.isInteger(reminderOffsetMinutes) || reminderOffsetMinutes < 0 || reminderOffsetMinutes > 59 || reminderOffsetHours * 60 + reminderOffsetMinutes <= 0) {
+				uni.showToast({ title: '提醒分钟需为 0-59，且总提醒时间需大于 0', icon: 'none' })
+				return
+			}
+			let reminderAt = ''
+			if (reminderMode === REMINDER_MODE_SMART) {
+				const deadlineDate = new Date(deadline)
+				reminderAt = new Date(deadlineDate.getTime() - (reminderOffsetHours * 60 + reminderOffsetMinutes) * 60 * 1000).toISOString()
 			}
 
 			this.loadHomework()
@@ -682,6 +825,11 @@ export default {
 						deadlineDate: this.form.deadlineDate,
 						deadlineTime: this.form.deadlineTime,
 						reminderOffsetHours,
+						reminderOffsetMinutes,
+						reminderMode,
+						reminderAt,
+						deadlineTip: this.form.deadlineTip,
+						reminderTip: this.form.reminderTip,
 						imagePaths: [...this.form.imagePaths],
 						audios: this.form.audios.map(item => ({ ...item })),
 						imagePath: this.form.imagePath,
@@ -701,6 +849,12 @@ export default {
 					deadline,
 					deadlineDate: this.form.deadlineDate,
 					deadlineTime: this.form.deadlineTime,
+					reminderOffsetHours,
+					reminderOffsetMinutes,
+					reminderMode,
+					reminderAt,
+					deadlineTip: this.form.deadlineTip,
+					reminderTip: this.form.reminderTip,
 					imagePaths: [...this.form.imagePaths],
 					audios: this.form.audios.map(item => ({ ...item })),
 					imagePath: this.form.imagePath,
@@ -773,10 +927,6 @@ export default {
 		getDefaultDeadlineOffsetHours() {
 			const saved = Number(uni.getStorageSync(DEFAULT_DEADLINE_OFFSET_KEY))
 			return saved > 0 ? saved : DEFAULT_DEADLINE_OFFSET_HOURS
-		},
-		getDefaultReminderOffsetHours() {
-			const saved = Number(uni.getStorageSync(DEFAULT_REMINDER_OFFSET_KEY))
-			return saved > 0 ? saved : DEFAULT_REMINDER_OFFSET_HOURS
 		},
 		getDefaultReminderOffsetHours() {
 			const saved = Number(uni.getStorageSync(DEFAULT_REMINDER_OFFSET_KEY))
@@ -1448,9 +1598,26 @@ export default {
 	color: #111827;
 }
 
+.reminder-input.minute {
+	width: 120rpx;
+}
+
 .reminder-unit {
 	flex: 1;
 	font-size: 28rpx;
 	color: #6b7280;
 }
+
+.reminder-unit.minute {
+	flex: 0 0 auto;
+}
+
+.auto-tip {
+	display: block;
+	margin-top: 10rpx;
+	font-size: 23rpx;
+	line-height: 1.5;
+	color: #64748b;
+}
+
 </style>

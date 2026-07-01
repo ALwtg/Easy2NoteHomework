@@ -21,7 +21,8 @@
             "Camera" : {},
             "Record" : {},
             "Share" : {},
-            "Barcode" : {}
+            "Barcode" : {},
+            "Push" : {}
         },
         /* 应用发布信息 */
         "distribute" : {
@@ -40,10 +41,13 @@
                     "<uses-permission android:name=\"android.permission.READ_PHONE_STATE\"/>",
                     "<uses-permission android:name=\"android.permission.CHANGE_WIFI_STATE\"/>",
                     "<uses-permission android:name=\"android.permission.WAKE_LOCK\"/>",
+                    "<uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>",
+                    "<uses-permission android:name=\"android.permission.RECEIVE_BOOT_COMPLETED\"/>",
                     "<uses-permission android:name=\"android.permission.FLASHLIGHT\"/>",
                     "<uses-feature android:name=\"android.hardware.camera\"/>",
                     "<uses-permission android:name=\"android.permission.WRITE_SETTINGS\"/>",
-                    "<uses-permission android:name=\"android.permission.INTERNET\"/>"
+                    "<uses-permission android:name=\"android.permission.INTERNET\"/>",
+                    "<uses-permission android:name=\"android.permission.QUERY_ALL_PACKAGES\"/>"
                 ],
                 "minSdkVersion" : 21,
                 "targetSdkVersion" : 30,

@@ -7,6 +7,7 @@ import {
 	saveScheduleMeta,
 	loadClearManualOnImport
 } from './schedule.js'
+import { syncSubjectsFromCourses } from './subjects.js'
 
 // 把导入到的课表与既有手动课合并：
 // - 默认保留所有 manual 课程
@@ -101,13 +102,31 @@ function clearStorageKeys() {
 	// #endif
 }
 
+function collectCourseList(source) {
+	if (!source || typeof source !== 'object') return []
+	const keys = ['kbList', 'sjkList', 'sjkcbList', 'sjjxList', 'sxList']
+	return keys.reduce((list, key) => {
+		return Array.isArray(source[key]) ? list.concat(source[key]) : list
+	}, [])
+}
+
 function pickSchedulePayload(parsed) {
 	if (Array.isArray(parsed)) return { list: parsed, metaSource: {} }
 	if (!parsed || typeof parsed !== 'object') return { list: [], metaSource: {} }
-	if (Array.isArray(parsed.kbList)) return { list: parsed.kbList, metaSource: parsed }
-	if (parsed.data && Array.isArray(parsed.data.kbList)) return { list: parsed.data.kbList, metaSource: { ...parsed.data, ...parsed } }
-	if (parsed.datas && Array.isArray(parsed.datas.kbList)) return { list: parsed.datas.kbList, metaSource: { ...parsed.datas, ...parsed } }
-	if (parsed.result && Array.isArray(parsed.result.kbList)) return { list: parsed.result.kbList, metaSource: { ...parsed.result, ...parsed } }
+	const directList = collectCourseList(parsed)
+	if (directList.length) return { list: directList, metaSource: parsed }
+	if (parsed.data) {
+		const list = collectCourseList(parsed.data)
+		if (list.length) return { list, metaSource: { ...parsed.data, ...parsed } }
+	}
+	if (parsed.datas) {
+		const list = collectCourseList(parsed.datas)
+		if (list.length) return { list, metaSource: { ...parsed.datas, ...parsed } }
+	}
+	if (parsed.result) {
+		const list = collectCourseList(parsed.result)
+		if (list.length) return { list, metaSource: { ...parsed.result, ...parsed } }
+	}
 	return { list: [], metaSource: parsed }
 }
 
@@ -119,21 +138,22 @@ function parseJsonLikeText(rawText) {
 		return JSON.parse(text)
 	} catch (e) {}
 
-	const jsonMatch = text.match(/\{[\s\S]*"kbList"[\s\S]*\}/)
+	const listKeyPattern = '"(?:kbList|sjkList|sjkcbList|sjjxList|sxList)"'
+	const jsonMatch = text.match(new RegExp(`\\{[\\s\\S]*${listKeyPattern}[\\s\\S]*\\}`))
 	if (jsonMatch) {
 		try {
 			return JSON.parse(jsonMatch[0])
 		} catch (e) {}
 	}
 
-	const arrayMatch = text.match(/"kbList"\s*:\s*(\[[\s\S]*?\])\s*[,}]/)
+	const arrayMatch = text.match(new RegExp(`${listKeyPattern}\\s*:\\s*(\\[[\\s\\S]*?\\])\\s*[,}]`))
 	if (arrayMatch) {
 		try {
 			return { kbList: JSON.parse(arrayMatch[1]) }
 		} catch (e) {}
 	}
 
-	throw new Error('未识别到课表数据。网页端请粘贴接口返回 JSON，或包含 kbList 的页面源码。')
+	throw new Error('未识别到课表数据。网页端请粘贴接口返回 JSON，或包含课程列表的页面源码。')
 }
 
 export function parseScheduleImportText(rawText) {
@@ -159,7 +179,9 @@ export function parseScheduleImportText(rawText) {
 
 export function importScheduleFromText(rawText) {
 	const result = parseScheduleImportText(rawText)
-	saveCourses(mergeWithManualCourses(result.courses))
+	const nextCourses = mergeWithManualCourses(result.courses)
+	saveCourses(nextCourses)
+	syncSubjectsFromCourses(nextCourses)
 	saveScheduleMeta(result.meta)
 	return result
 }
@@ -348,13 +370,15 @@ export function importScheduleFromZf({ onSuccess, onCancel, onError } = {}) {
 				try {
 					const parsed = JSON.parse(raw || '{}')
 					const data = parsed.data || {}
-					const list = data.kbList || []
+					const list = collectCourseList(data)
 					const courses = list.map(normalizeCourseFromZf).filter(Boolean)
 					if (!courses.length) {
 						plus.nativeUI.toast('该学期暂无课表数据')
 						return
 					}
-					saveCourses(mergeWithManualCourses(courses))
+					const nextCourses = mergeWithManualCourses(courses)
+					saveCourses(nextCourses)
+					syncSubjectsFromCourses(nextCourses)
 					saveScheduleMeta({
 						xnm: parsed.xnm,
 						xqm: parsed.xqm,

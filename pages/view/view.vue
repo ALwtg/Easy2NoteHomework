@@ -65,8 +65,15 @@
 		<view v-if="showShareMenu || showImportMenu" class="menu-mask" @click="closeMenus"></view>
 
 		<view v-if="showShareMenu" class="floating-menu share-menu" @click.stop>
+			<!-- #ifndef APP-PLUS -->
 			<text class="floating-menu-tip">选择分享方式</text>
+			<!-- #endif -->
+			<!-- #ifdef APP-PLUS -->
+			<text class="floating-menu-tip">选择导出方式</text>
+			<!-- #endif -->
+			<!-- #ifndef APP-PLUS -->
 			<button class="floating-menu-item primary" open-type="share" @click="showShareMenu = false">微信分享</button>
+			<!-- #endif -->
 			<button class="floating-menu-item" @click="copyShareCode">复制分享码</button>
 			<button class="floating-menu-item" @click="exportShareFile">导出为文件</button>
 
@@ -90,7 +97,7 @@
 			<view
 				v-for="(item, index) in visibleHomework"
 				:key="item.id"
-				:class="['homework-card', cardEnterActive ? 'is-entering' : '', touchingId === item.id && swipeOffsetX ? 'is-swiping' : '', getSwipeActionClass(item), item.completed ? 'is-done' : '', item.id === completingId ? 'is-completing' : '']"
+				:class="['homework-card', getHomeworkCardStatusClass(item), cardEnterActive ? 'is-entering' : '', touchingId === item.id && swipeOffsetX ? 'is-swiping' : '', getSwipeActionClass(item), item.completed ? 'is-done' : '', item.id === completingId ? 'is-completing' : '']"
 				:style="getCardStyle(item, index)"
 				@touchstart="onTouchStart($event, item.id)"
 				@touchmove="onTouchMove($event, item.id)"
@@ -202,18 +209,22 @@
 						</picker>
 					</view>
 				</view>
+				<text v-if="form.deadlineTip" class="auto-tip">{{ form.deadlineTip }}</text>
 
 				<view class="field">
 					<text class="label">提醒时间</text>
 					<view class="reminder-row">
-						<input class="reminder-input" type="number" v-model="form.reminderOffsetHours" placeholder="23" maxlength="3" />
-						<text class="reminder-unit">截止前小时提醒</text>
+						<input class="reminder-input" type="number" v-model="form.reminderOffsetHours" :placeholder="form.reminderMode === 'smart' ? '1' : '23'" maxlength="3" />
+						<text class="reminder-unit">{{ form.reminderMode === 'smart' ? '小时' : '截止前小时提醒' }}</text>
+						<input v-if="form.reminderMode === 'smart'" class="reminder-input minute" type="number" v-model="form.reminderOffsetMinutes" placeholder="0" maxlength="2" />
+						<text v-if="form.reminderMode === 'smart'" class="reminder-unit minute">分钟前提醒</text>
 					</view>
+					<text v-if="form.reminderTip" class="auto-tip">{{ form.reminderTip }}</text>
 				</view>
 
 				<view class="field">
 					<text class="label">{{ hasFormAttachment ? '备注' : '作业内容' }}</text>
-					<textarea class="note" v-model="form.note" :placeholder="hasFormAttachment ? '例如：第 3 章习题、需要提交实验报告' : '请输入老师布置的作业内容'" maxlength="200" />
+					<textarea class="note" v-model="form.note" :placeholder="hasFormAttachment ? '例如：第 3 章习题、需要提交实验报告' : '请输入老师布置的作业内容'" />
 				</view>
 
 				<button class="save-btn" @click="saveHomework">保存修改</button>
@@ -229,17 +240,27 @@ import {
 	setHomeworkReminder, 
 	cancelHomeworkReminder,
 	checkAndSetReminders,
-	resetNotificationStatus
+	resetNotificationStatus,
+	getReminderMode,
+	getSmartReminderOffsetMinutes,
+	REMINDER_MODE_SMART
 } from '@/utils/notification.js'
+import {
+	loadCourses,
+	loadPeriodConfig,
+	buildPeriodTimes,
+	findNextCourseForSubject,
+	findCourseAtDeadline,
+	formatCoursePoint
+} from '@/utils/schedule.js'
 import { exportTextAsFile, pickAndReadTextFile } from '@/utils/shareFile.js'
+import { loadSubjects, saveSubjects } from '@/utils/subjects.js'
 
 const HOMEWORK_KEY = 'homework_list'
-const SUBJECT_KEY = 'subject_list'
 const DEFAULT_DEADLINE_OFFSET_KEY = 'default_deadline_offset_hours'
 const DEFAULT_DEADLINE_OFFSET_HOURS = 24
 const DEFAULT_REMINDER_OFFSET_KEY = 'default_reminder_offset_hours'
 const DEFAULT_REMINDER_OFFSET_HOURS = 23
-const DEFAULT_SUBJECTS = ['高等数学', '大学英语', '程序设计', '数据结构', '线性代数']
 const HOMEWORK_LOAD_BATCH_SIZE = 30
 const HOMEWORK_LOAD_INTERVAL = 90
 
@@ -640,11 +661,20 @@ export default {
 		},
 		createEmptyForm() {
 			const deadline = this.getDefaultDeadlineDate()
+			const reminderMode = getReminderMode()
+			const offsetMinutes = reminderMode === REMINDER_MODE_SMART
+				? getSmartReminderOffsetMinutes()
+				: this.getDefaultReminderOffsetHours() * 60
 			return {
 				subject: '',
 				deadlineDate: this.formatDate(deadline),
 				deadlineTime: this.formatTime(deadline),
-				reminderOffsetHours: `${this.getDefaultReminderOffsetHours()}`,
+				reminderOffsetHours: `${Math.floor(offsetMinutes / 60)}`,
+				reminderMode,
+				reminderAt: '',
+				reminderOffsetMinutes: offsetMinutes % 60,
+				deadlineTip: '',
+				reminderTip: '',
 				imagePaths: [],
 				audios: [],
 				imagePath: '',
@@ -654,18 +684,7 @@ export default {
 			}
 		},
 		loadSubjects() {
-			const saved = uni.getStorageSync(SUBJECT_KEY)
-			if (Array.isArray(saved) && saved.length) {
-				this.subjectList = saved
-				return
-			}
-
-			this.subjectList = DEFAULT_SUBJECTS.map(name => ({
-				id: this.createId(),
-				name,
-				createdAt: new Date().toISOString()
-			}))
-			this.saveSubjects()
+			this.subjectList = loadSubjects()
 		},
 		loadHomework() {
 			const saved = uni.getStorageSync(HOMEWORK_KEY)
@@ -721,7 +740,7 @@ export default {
 			this.syncLegacyAttachmentFields()
 		},
 		saveSubjects() {
-			uni.setStorageSync(SUBJECT_KEY, this.subjectList)
+			saveSubjects(this.subjectList)
 		},
 		saveHomeworkList() {
 			uni.setStorageSync(HOMEWORK_KEY, this.homeworkList)
@@ -959,12 +978,65 @@ export default {
 		},
 		onSubjectChange(event) {
 			this.form.subject = this.subjectNames[event.detail.value]
+			this.updateDeadlineBySubject()
+		},
+		updateDeadlineBySubject() {
+			const subject = this.form.subject
+			if (!subject) return false
+			const courses = loadCourses()
+			const periodTimes = buildPeriodTimes(loadPeriodConfig())
+			const nextInfo = findNextCourseForSubject(subject, { courses, periodTimes })
+			if (nextInfo && nextInfo.startAt) {
+				this.form.deadlineDate = this.formatDate(nextInfo.startAt)
+				this.form.deadlineTime = this.formatTime(nextInfo.startAt)
+				this.form.deadlineTip = `已按${formatCoursePoint(nextInfo)}设置截止时间`
+				this.updateReminderTip(nextInfo)
+				return true
+			}
+			this.form.deadlineTip = '课表中未找到该学科的下一次上课时间'
+			this.updateReminderTip()
+			return false
+		},
+		updateDeadlineTipByDateTime() {
+			const courseInfo = findCourseAtDeadline(this.form.deadlineDate, this.form.deadlineTime)
+			if (courseInfo && courseInfo.course) {
+				this.form.deadlineTip = `截止时间对应：${formatCoursePoint(courseInfo)}`
+			} else {
+				this.form.deadlineTip = '该时间无对应课程'
+			}
+			this.updateReminderTip(courseInfo)
+		},
+		updateReminderTip(courseInfo = null) {
+			const mode = this.form.reminderMode || getReminderMode()
+			this.form.reminderMode = mode
+			if (mode !== REMINDER_MODE_SMART) {
+				this.form.reminderTip = ''
+				this.form.reminderAt = ''
+				return
+			}
+			const offsetHours = Number(this.form.reminderOffsetHours || 0)
+			const offsetMinutes = Number(this.form.reminderOffsetMinutes || 0)
+			const totalMinutes = offsetHours * 60 + offsetMinutes
+			if (!totalMinutes) {
+				this.form.reminderTip = ''
+				this.form.reminderAt = ''
+				return
+			}
+			const deadline = new Date(`${this.form.deadlineDate}T${this.form.deadlineTime}:00`)
+			if (Number.isNaN(deadline.getTime())) return
+			this.form.reminderAt = new Date(deadline.getTime() - totalMinutes * 60 * 1000).toISOString()
+			const timeText = `${offsetHours}小时${offsetMinutes}分钟`
+			this.form.reminderTip = courseInfo && courseInfo.course
+				? `将在${formatCoursePoint(courseInfo)}开始前 ${timeText}提醒`
+				: `将在截止前 ${timeText}提醒`
 		},
 		onDateChange(event) {
 			this.form.deadlineDate = event.detail.value
+			this.updateDeadlineTipByDateTime()
 		},
 		onTimeChange(event) {
 			this.form.deadlineTime = event.detail.value
+			this.updateDeadlineTipByDateTime()
 		},
 		addSubject() {
 			const name = this.newSubjectName.trim()
@@ -985,6 +1057,7 @@ export default {
 
 			this.form.subject = name
 			this.newSubjectName = ''
+			this.updateDeadlineBySubject()
 			uni.showToast({ title: exists ? '已选择该学科' : '学科已新建', icon: 'none' })
 		},
 		editHomework(item) {
@@ -1000,6 +1073,12 @@ export default {
 				subject: normalized.subject,
 				deadlineDate: normalized.deadlineDate || '',
 				deadlineTime: normalized.deadlineTime || '',
+				reminderOffsetHours: `${Number(normalized.reminderOffsetHours) || this.getDefaultReminderOffsetHours()}`,
+				reminderMode: normalized.reminderMode || getReminderMode(),
+				reminderAt: normalized.reminderAt || '',
+				reminderOffsetMinutes: Number(normalized.reminderOffsetMinutes || 0),
+				deadlineTip: normalized.deadlineTip || '',
+				reminderTip: normalized.reminderTip || '',
 				imagePaths: [...normalized.imagePaths],
 				audios: normalized.audios.map(audio => ({ ...audio })),
 				imagePath: normalized.imagePath || '',
@@ -1007,6 +1086,7 @@ export default {
 				audioDuration: normalized.audioDuration || 0,
 				note: normalized.note || ''
 			}
+			this.updateReminderTip(findCourseAtDeadline(this.form.deadlineDate, this.form.deadlineTime))
 			this.showForm = true
 		},
 		async saveHomework() {
@@ -1024,10 +1104,21 @@ export default {
 			}
 
 			const deadline = `${this.form.deadlineDate}T${this.form.deadlineTime}:00`
+			const reminderMode = this.form.reminderMode || getReminderMode()
 			const reminderOffsetHours = Number(this.form.reminderOffsetHours)
-			if (!Number.isInteger(reminderOffsetHours) || reminderOffsetHours <= 0 || reminderOffsetHours > 168) {
-				uni.showToast({ title: '提醒时间需为 1-168 小时', icon: 'none' })
+			const reminderOffsetMinutes = Number(this.form.reminderOffsetMinutes || 0)
+			if (!Number.isInteger(reminderOffsetHours) || reminderOffsetHours < 0 || reminderOffsetHours > 168) {
+				uni.showToast({ title: '提醒小时需为 0-168', icon: 'none' })
 				return
+			}
+			if (!Number.isInteger(reminderOffsetMinutes) || reminderOffsetMinutes < 0 || reminderOffsetMinutes > 59 || reminderOffsetHours * 60 + reminderOffsetMinutes <= 0) {
+				uni.showToast({ title: '提醒分钟需为 0-59，且总提醒时间需大于 0', icon: 'none' })
+				return
+			}
+			let reminderAt = ''
+			if (reminderMode === REMINDER_MODE_SMART) {
+				const deadlineDate = new Date(deadline)
+				reminderAt = new Date(deadlineDate.getTime() - (reminderOffsetHours * 60 + reminderOffsetMinutes) * 60 * 1000).toISOString()
 			}
 			
 			if (this.editingId) {
@@ -1041,6 +1132,11 @@ export default {
 						deadlineDate: this.form.deadlineDate,
 						deadlineTime: this.form.deadlineTime,
 						reminderOffsetHours,
+						reminderOffsetMinutes,
+						reminderMode,
+						reminderAt,
+						deadlineTip: this.form.deadlineTip,
+						reminderTip: this.form.reminderTip,
 						imagePaths: [...this.form.imagePaths],
 						audios: this.form.audios.map(audio => ({ ...audio })),
 						imagePath: this.form.imagePath,
@@ -1212,6 +1308,12 @@ export default {
 			if (this.isOverdue(item)) return '已逾期'
 			if (this.isUrgent(item)) return '即将截止'
 			return '未完成'
+		},
+		getHomeworkCardStatusClass(item) {
+			if (item.completed) return 'card-status-done'
+			if (this.isOverdue(item)) return 'card-status-overdue'
+			if (this.isUrgent(item)) return 'card-status-urgent'
+			return 'card-status-pending'
 		},
 		getDeadlineClass(item) {
 			if (this.isOverdue(item)) return 'status-overdue'
@@ -1719,10 +1821,57 @@ export default {
 	font-size: 26rpx;
 }
 
+.date-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16rpx;
+}
+
+.reminder-row {
+	display: flex;
+	align-items: center;
+	gap: 16rpx;
+}
+
+.reminder-input {
+	box-sizing: border-box;
+	width: 180rpx;
+	height: 82rpx;
+	padding: 0 22rpx;
+	border-radius: 18rpx;
+	background: #f8fafc;
+	font-size: 30rpx;
+	font-weight: 700;
+	color: #111827;
+}
+
+.reminder-input.minute {
+	width: 120rpx;
+}
+
+.reminder-unit {
+	flex: 1;
+	font-size: 28rpx;
+	color: #6b7280;
+}
+
+.reminder-unit.minute {
+	flex: 0 0 auto;
+}
+
+.auto-tip {
+	display: block;
+	margin-top: 12rpx;
+	font-size: 23rpx;
+	color: #2563eb;
+}
+
 .note {
 	height: 150rpx;
 	padding: 18rpx 22rpx;
 }
+
 
 .save-btn {
 	margin-top: 28rpx;
@@ -1820,13 +1969,34 @@ export default {
 	display: flex;
 	overflow: hidden;
 	padding: 20rpx;
+	border: 3rpx solid transparent;
 	border-radius: 28rpx;
 	background: #fff;
 	box-shadow: 0 12rpx 34rpx rgba(31, 45, 61, 0.07);
 	cursor: pointer;
 	animation: homeworkCardEnter 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
-	transition: opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+	transition: opacity 0.2s ease, transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 	will-change: transform, opacity;
+}
+
+.homework-card.card-status-urgent {
+	border-color: #f97316;
+	box-shadow: 0 12rpx 34rpx rgba(249, 115, 22, 0.16);
+}
+
+.homework-card.card-status-pending {
+	border-color: #2979ff;
+	box-shadow: 0 12rpx 34rpx rgba(41, 121, 255, 0.14);
+}
+
+.homework-card.card-status-done {
+	border-color: #16a34a;
+	box-shadow: 0 12rpx 34rpx rgba(22, 163, 74, 0.14);
+}
+
+.homework-card.card-status-overdue {
+	border-color: #ef4444;
+	box-shadow: 0 12rpx 34rpx rgba(239, 68, 68, 0.16);
 }
 
 .homework-card.is-swiping {

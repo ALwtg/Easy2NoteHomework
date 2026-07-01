@@ -19,8 +19,22 @@
 				<button class="primary-btn" @click="addSubject">新增</button>
 			</view>
 
-			<scroll-view v-if="subjectList.length" class="subject-list" scroll-y show-scrollbar="false">
-				<view class="subject-item" v-for="item in subjectList" :key="item.id">
+			<scroll-view v-if="subjectList.length" class="subject-list" scroll-y show-scrollbar="false" @scroll="onListScroll">
+				<view
+					class="subject-item"
+					v-for="(item, idx) in subjectList"
+					:key="item.id"
+					:class="{ 'is-dragging': subjectDrag && subjectDrag.active && subjectDrag.dragIndex === idx, 'is-drag-target': subjectDrag && subjectDrag.active && subjectDrag.targetIndex === idx }"
+				>
+					<image
+						class="drag-handle"
+						src="/static/move.png"
+						mode="aspectFit"
+						@touchstart.stop.prevent="onHandleTouchStart(idx, $event)"
+						@touchmove.stop.prevent="onHandleTouchMove($event)"
+						@touchend.stop.prevent="onHandleTouchEnd($event)"
+						@touchcancel.stop.prevent="onHandleTouchEnd($event)"
+					></image>
 					<input
 						class="subject-name"
 						:value="item.name"
@@ -39,16 +53,24 @@
 </template>
 
 <script>
-const SUBJECT_KEY = 'subject_list'
+import { loadSubjects, saveSubjects, createSubject } from '@/utils/subjects.js'
+
 const HOMEWORK_KEY = 'homework_list'
-const DEFAULT_SUBJECTS = ['高等数学', '大学英语', '程序设计', '数据结构', '线性代数']
 
 export default {
 	data() {
 		return {
 			subjectList: [],
-			newSubjectName: ''
+			newSubjectName: '',
+			// 学科拖动排序状态
+			subjectDrag: null // { dragIndex, targetIndex, startY, currentY, active, longPressTimer }
 		}
+	},
+	created() {
+		// 实测坐标缓存：列表顶部 Y、单项高度、滚动偏移
+		this.__listTop = 0
+		this.__itemHeight = 0
+		this.__scrollTop = 0
 	},
 	onShow() {
 		this.loadSubjects()
@@ -58,21 +80,127 @@ export default {
 			uni.navigateBack({ delta: 1 })
 		},
 		loadSubjects() {
-			const saved = uni.getStorageSync(SUBJECT_KEY)
-			if (Array.isArray(saved) && saved.length) {
-				this.subjectList = saved
-				return
-			}
-
-			this.subjectList = DEFAULT_SUBJECTS.map(name => ({
-				id: this.createId(),
-				name,
-				createdAt: new Date().toISOString()
-			}))
-			this.saveSubjects()
+			this.subjectList = loadSubjects()
 		},
 		saveSubjects() {
-			uni.setStorageSync(SUBJECT_KEY, this.subjectList)
+			saveSubjects(this.subjectList)
+		},
+		// === 学科拖动排序 ===
+		// 异步实测列表顶部 Y 与单项高度，缓存到实例属性（仅 touchStart 时调用一次）
+		measureListGeometry() {
+			try {
+				const query = uni.createSelectorQuery().in(this)
+				query.select('.subject-list').boundingClientRect()
+				query.selectAll('.subject-item').boundingClientRect()
+				query.exec(res => {
+					const listRect = res && res[0]
+					const itemRects = res && res[1]
+					if (listRect) this.__listTop = listRect.top
+					if (Array.isArray(itemRects) && itemRects.length) {
+						// 用前两项 top 差作 itemHeight（更稳健），否则用单项 height
+						if (itemRects.length >= 2 && itemRects[1] && itemRects[0]) {
+							this.__itemHeight = itemRects[1].top - itemRects[0].top
+						}
+						if ((!this.__itemHeight || this.__itemHeight <= 0) && itemRects[0]) {
+							this.__itemHeight = itemRects[0].height
+						}
+					}
+				})
+			} catch (e) {}
+		},
+		onListScroll(e) {
+			this.__scrollTop = (e && e.detail ? Number(e.detail.scrollTop) || 0 : 0)
+		},
+		onHandleTouchStart(index, e) {
+			const touch = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0])
+			if (!touch) return
+			// 触摸开始即异步测量列表几何（长按 400ms 内必定完成，touchmove 时数据就绪）
+			this.measureListGeometry()
+			if (this.subjectDrag && this.subjectDrag.longPressTimer) {
+				clearTimeout(this.subjectDrag.longPressTimer)
+			}
+			const drag = {
+				dragIndex: index,
+				targetIndex: index,
+				startY: touch.clientY,
+				currentY: touch.clientY,
+				active: false,
+				longPressTimer: null
+			}
+			drag.longPressTimer = setTimeout(() => {
+				if (this.subjectDrag && this.subjectDrag.dragIndex === index) {
+					this.subjectDrag.active = true
+					try { uni.vibrateShort && uni.vibrateShort({ type: 'light' }) } catch (err) {}
+				}
+			}, 400)
+			this.subjectDrag = drag
+		},
+		onHandleTouchMove(e) {
+			if (!this.subjectDrag) return
+			const touch = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0])
+			if (!touch) return
+			const dy = touch.clientY - this.subjectDrag.startY
+			// 未激活前：轻微移动取消长按
+			if (!this.subjectDrag.active) {
+				if (Math.abs(dy) > 8) {
+					if (this.subjectDrag.longPressTimer) {
+						clearTimeout(this.subjectDrag.longPressTimer)
+						this.subjectDrag.longPressTimer = null
+					}
+					this.subjectDrag = null
+				}
+				return
+			}
+			this.subjectDrag = {
+				...this.subjectDrag,
+				currentY: touch.clientY,
+				targetIndex: this.computeTargetIndex(touch.clientY)
+			}
+			// 若目标索引变化则交换数组顺序
+			if (this.subjectDrag.targetIndex !== this.subjectDrag.dragIndex) {
+				const from = this.subjectDrag.dragIndex
+				const to = this.subjectDrag.targetIndex
+				if (from >= 0 && from < this.subjectList.length && to >= 0 && to < this.subjectList.length) {
+					const list = this.subjectList.slice()
+					const [moved] = list.splice(from, 1)
+					list.splice(to, 0, moved)
+					this.subjectList = list
+					this.subjectDrag = { ...this.subjectDrag, dragIndex: to }
+					this.saveSubjects()
+				}
+			}
+		},
+		onHandleTouchEnd() {
+			if (!this.subjectDrag) return
+			if (this.subjectDrag.longPressTimer) {
+				clearTimeout(this.subjectDrag.longPressTimer)
+				this.subjectDrag.longPressTimer = null
+			}
+			if (this.subjectDrag.active) {
+				this.saveSubjects()
+				uni.showToast({ title: '顺序已更新', icon: 'none' })
+			}
+			this.subjectDrag = null
+		},
+		// 根据触摸 Y 坐标计算落在哪个学科项上（用实测列表 top + item 高度 + 滚动偏移）
+		computeTargetIndex(clientY) {
+			try {
+				const itemHeight = this.__itemHeight || 0
+				const listTop = this.__listTop || 0
+				const scrollTop = this.__scrollTop || 0
+				if (itemHeight <= 0) {
+					// 测量未就绪时的兜底：保持原索引
+					return this.subjectDrag ? this.subjectDrag.dragIndex : 0
+				}
+				// 相对列表内容区的 Y（需加上滚动偏移，因为 boundingClientRect.top 是视口坐标）
+				const relativeY = clientY - listTop + scrollTop
+				let idx = Math.floor(relativeY / itemHeight)
+				if (idx < 0) idx = 0
+				if (idx > this.subjectList.length - 1) idx = this.subjectList.length - 1
+				return idx
+			} catch (e) {
+				return this.subjectDrag ? this.subjectDrag.dragIndex : 0
+			}
 		},
 		addSubject() {
 			const name = this.newSubjectName.trim()
@@ -85,11 +213,7 @@ export default {
 				return
 			}
 
-			this.subjectList.unshift({
-				id: this.createId(),
-				name,
-				createdAt: new Date().toISOString()
-			})
+			this.subjectList.unshift(createSubject(name))
 			this.newSubjectName = ''
 			this.saveSubjects()
 			uni.showToast({ title: '已新增', icon: 'success' })
@@ -135,9 +259,6 @@ export default {
 					uni.showToast({ title: '已删除', icon: 'success' })
 				}
 			})
-		},
-		createId() {
-			return `${Date.now()}_${Math.random().toString(16).slice(2)}`
 		}
 	}
 }
@@ -268,10 +389,32 @@ export default {
 	gap: 16rpx;
 	padding: 16rpx 0;
 	border-bottom: 1rpx solid #eef2f7;
+	transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .subject-item:last-child {
 	border-bottom: 0;
+}
+
+.subject-item.is-dragging {
+	opacity: 0.85;
+	box-shadow: 0 8rpx 24rpx rgba(41, 121, 255, 0.22);
+	transform: scale(1.02);
+}
+
+.subject-item.is-drag-target {
+	background: #eef6ff;
+}
+
+.drag-handle {
+	width: 44rpx;
+	height: 44rpx;
+	flex-shrink: 0;
+	opacity: 0.55;
+}
+
+.drag-handle:active {
+	opacity: 0.9;
 }
 
 .empty {

@@ -59,17 +59,45 @@
 
 			<view class="form-row form-row-block">
 				<view class="form-row-head">
-					<text class="form-label-strong">重叠课程切换时长</text>
-					<text class="form-value">{{ blinkCycleSecondsText }} 秒</text>
+					<text class="form-label-strong">重叠显示模式</text>
 				</view>
-				<text class="cell-desc">同一时段存在多门课时，按设定时长依次淡入/淡出循环显示。</text>
+				<text class="cell-desc">同一时段存在多门课时，可选择"切换显示"（轮流闪烁）或"重叠显示"（按学科顺序分层同时显示）。</text>
+				<view class="mode-row">
+					<view :class="['mode-chip', appearance.overlapDisplayMode === 'switch' ? 'active' : '']" @click="setOverlapMode('switch')">切换显示</view>
+					<view :class="['mode-chip', appearance.overlapDisplayMode === 'overlap' ? 'active' : '']" @click="setOverlapMode('overlap')">重叠显示</view>
+				</view>
+			</view>
+
+			<view class="form-row form-row-block">
+				<view class="form-row-head">
+					<text class="form-label-strong">最低透明度</text>
+					<text class="form-value">{{ Math.round(appearance.overlapMinOpacity * 100) }}%</text>
+				</view>
+				<text class="cell-desc">切换显示模式下非激活课程的最低可见度；重叠显示模式下最底层课程的透明度。</text>
 				<slider
-					:value="blinkCycleTenth"
+					:value="minOpacityPercent"
+					:min="0"
+					:max="50"
+					:step="5"
+					show-value
+					activeColor="#2979ff"
+					@change="onMinOpacityChange"
+				/>
+			</view>
+
+			<view v-if="appearance.overlapDisplayMode === 'switch'" class="form-row form-row-block">
+				<view class="form-row-head">
+					<text class="form-label-strong">切换频率</text>
+					<text class="form-value">{{ switchFrequencySecondsText }} 秒</text>
+				</view>
+				<text class="cell-desc">切换显示模式下，每节课的停留时长（含淡入淡出）。</text>
+				<slider
+					:value="switchFrequencyTenth"
 					:min="10"
 					:max="100"
 					:step="5"
 					activeColor="#2979ff"
-					@change="onBlinkCycleChange"
+					@change="onSwitchFrequencyChange"
 				/>
 			</view>
 		</view>
@@ -116,16 +144,66 @@
 					<view class="picker-preview" :style="{ background: pickerColor }"></view>
 					<text class="picker-hex">{{ pickerColor }}</text>
 				</view>
-				<view class="picker-grid">
-					<view
-						v-for="color in colorPresets"
-						:key="color"
-						class="picker-swatch"
-						:class="{ active: pickerColor === color }"
-						:style="{ background: color }"
-						@click="pickerColor = color"
-					></view>
+			<view class="picker-grid">
+				<view
+					v-for="color in colorPresets"
+					:key="color"
+					class="picker-swatch"
+					:class="{ active: pickerColor === color }"
+					:style="{ background: color }"
+					@click="onPresetPick(color)"
+				></view>
+			</view>
+			<view class="picker-wheel">
+				<view class="wheel-row">
+					<text class="wheel-label">色相</text>
+					<slider
+						class="wheel-slider hue-slider"
+						:min="0"
+						:max="360"
+						:step="1"
+						:value="pickerHue"
+						:activeColor="`hsl(${pickerHue},100%,50%)`"
+						background-color="#9ca3af"
+						block-size="20"
+						@changing="onHueChanging"
+						@change="onHueChange"
+					/>
+					<text class="wheel-value">{{ pickerHue }}</text>
 				</view>
+				<view class="wheel-row">
+					<text class="wheel-label">饱和度</text>
+					<slider
+						class="wheel-slider"
+						:min="0"
+						:max="100"
+						:step="1"
+						:value="pickerSat"
+						:activeColor="`hsl(${pickerHue},${pickerSat}%,50%)`"
+						background-color="#e5e7eb"
+						block-size="20"
+						@changing="onSatChanging"
+						@change="onSatChange"
+					/>
+					<text class="wheel-value">{{ pickerSat }}%</text>
+				</view>
+				<view class="wheel-row">
+					<text class="wheel-label">明度</text>
+					<slider
+						class="wheel-slider"
+						:min="0"
+						:max="100"
+						:step="1"
+						:value="pickerLight"
+						:activeColor="`hsl(${pickerHue},${pickerSat}%,${pickerLight}%)`"
+						background-color="#e5e7eb"
+						block-size="20"
+						@changing="onLightChanging"
+						@change="onLightChange"
+					/>
+					<text class="wheel-value">{{ pickerLight }}%</text>
+				</view>
+			</view>
 				<view class="picker-actions">
 					<button class="ghost-btn full" @click="resetCourseColor">恢复默认</button>
 					<button class="primary-btn full" @click="confirmCourseColor">应用</button>
@@ -157,7 +235,10 @@ export default {
 			pickerVisible: false,
 			pickerTarget: null,
 			pickerColor: '',
-			colorPresets: COURSE_COLOR_PRESETS
+			colorPresets: COURSE_COLOR_PRESETS,
+			pickerHue: 0,
+			pickerSat: 100,
+			pickerLight: 50
 		}
 	},
 	computed: {
@@ -180,6 +261,17 @@ export default {
 		blinkCycleSecondsText() {
 			const ms = Number(this.appearance.overlapBlinkCycleMs) || 5000
 			return (ms / 1000).toFixed(1)
+		},
+		switchFrequencyTenth() {
+			const ms = Number(this.appearance.overlapSwitchFrequency) || 2000
+			return Math.round(ms / 100)
+		},
+		switchFrequencySecondsText() {
+			const ms = Number(this.appearance.overlapSwitchFrequency) || 2000
+			return (ms / 1000).toFixed(1)
+		},
+		minOpacityPercent() {
+			return Math.round((this.appearance.overlapMinOpacity || 0.1) * 100)
 		},
 		subjects() {
 			const map = new Map()
@@ -250,11 +342,11 @@ export default {
 			this.savePersistentBackground(path)
 		},
 		savePersistentBackground(path) {
-			this.appearance = saveAppearance({ ...this.appearance, backgroundImage: path })
+			this.appearance = saveAppearance({ ...this.appearance, backgroundImage: path, updatedAt: Date.now() })
 			uni.showToast({ title: '已设置', icon: 'success' })
 		},
 		clearBackground() {
-			this.appearance = saveAppearance({ ...this.appearance, backgroundImage: '' })
+			this.appearance = saveAppearance({ ...this.appearance, backgroundImage: '', updatedAt: Date.now() })
 			uni.showToast({ title: '已清除', icon: 'none' })
 		},
 		onBgOpacityChange(event) {
@@ -266,19 +358,98 @@ export default {
 			this.appearance = saveAppearance({ ...this.appearance, cardOpacity: value })
 		},
 		onBlinkCycleChange(event) {
-			// slider 值单位为 0.1 秒，× 100 还原为毫秒
+			// slider 值单位为 0.1 秒，× 100 还原为毫秒（废弃，迁移到 overlapSwitchFrequency）
 			const ms = Number(event.detail.value) * 100
-			this.appearance = saveAppearance({ ...this.appearance, overlapBlinkCycleMs: ms })
+			this.appearance = saveAppearance({ ...this.appearance, overlapBlinkCycleMs: ms, overlapSwitchFrequency: ms })
+		},
+		onSwitchFrequencyChange(event) {
+			const ms = Number(event.detail.value) * 100
+			this.appearance = saveAppearance({ ...this.appearance, overlapSwitchFrequency: ms })
+		},
+		onMinOpacityChange(event) {
+			const value = Number(event.detail.value) / 100
+			this.appearance = saveAppearance({ ...this.appearance, overlapMinOpacity: value })
+		},
+		setOverlapMode(mode) {
+			this.appearance = saveAppearance({ ...this.appearance, overlapDisplayMode: mode })
 		},
 		openColorPicker(item) {
 			this.pickerTarget = item
 			this.pickerColor = item.color
+			this.syncHslFromColor(item.color)
 			this.pickerVisible = true
 		},
 		closeColorPicker() {
 			this.pickerVisible = false
 			this.pickerTarget = null
 		},
+		// === HSL 色环调色 ===
+		// hex -> { h, s, l }（h:0-360, s/l:0-100）
+		hexToHsl(hex) {
+			const m = `${hex || ''}`.replace('#', '')
+			let r = 0, g = 0, b = 0
+			if (m.length === 3) {
+				r = parseInt(m[0] + m[0], 16)
+				g = parseInt(m[1] + m[1], 16)
+				b = parseInt(m[2] + m[2], 16)
+			} else if (m.length === 6) {
+				r = parseInt(m.slice(0, 2), 16)
+				g = parseInt(m.slice(2, 4), 16)
+				b = parseInt(m.slice(4, 6), 16)
+			}
+			r /= 255; g /= 255; b /= 255
+			const max = Math.max(r, g, b), min = Math.min(r, g, b)
+			let h = 0, s = 0
+			const l = (max + min) / 2
+			if (max !== min) {
+				const d = max - min
+				s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
+				switch (max) {
+					case r: h = ((g - b) / d + (g < b ? 6 : 0)); break
+					case g: h = ((b - r) / d + 2); break
+					case b: h = ((r - g) / d + 4); break
+				}
+				h *= 60
+			}
+			return { h: Math.round(h), s: Math.round(s * 100), l: Math.round(l * 100) }
+		},
+		// { h, s, l } -> hex
+		hslToHex(h, s, l) {
+			h = ((h % 360) + 360) % 360
+			s = Math.max(0, Math.min(100, s)) / 100
+			l = Math.max(0, Math.min(100, l)) / 100
+			const c = (1 - Math.abs(2 * l - 1)) * s
+			const x = c * (1 - Math.abs(((h / 60) % 2) - 1))
+			const m2 = l - c / 2
+			let r = 0, g = 0, b = 0
+			if (h < 60) { r = c; g = x; b = 0 }
+			else if (h < 120) { r = x; g = c; b = 0 }
+			else if (h < 180) { r = 0; g = c; b = x }
+			else if (h < 240) { r = 0; g = x; b = c }
+			else if (h < 300) { r = x; g = 0; b = c }
+			else { r = c; g = 0; b = x }
+			const toHex = n => `${Math.round((n + m2) * 255).toString(16).padStart(2, '0')}`
+			return `#${toHex(r)}${toHex(g)}${toHex(b)}`
+		},
+		syncHslFromColor(color) {
+			const hsl = this.hexToHsl(color)
+			this.pickerHue = hsl.h
+			this.pickerSat = hsl.s
+			this.pickerLight = hsl.l
+		},
+		onPresetPick(color) {
+			this.pickerColor = color
+			this.syncHslFromColor(color)
+		},
+		applyHslToColor() {
+			this.pickerColor = this.hslToHex(this.pickerHue, this.pickerSat, this.pickerLight)
+		},
+		onHueChanging(e) { this.pickerHue = Number(e.detail.value); this.applyHslToColor() },
+		onHueChange(e) { this.pickerHue = Number(e.detail.value); this.applyHslToColor() },
+		onSatChanging(e) { this.pickerSat = Number(e.detail.value); this.applyHslToColor() },
+		onSatChange(e) { this.pickerSat = Number(e.detail.value); this.applyHslToColor() },
+		onLightChanging(e) { this.pickerLight = Number(e.detail.value); this.applyHslToColor() },
+		onLightChange(e) { this.pickerLight = Number(e.detail.value); this.applyHslToColor() },
 		confirmCourseColor() {
 			if (!this.pickerTarget) return
 			this.colorMap = setCourseColor(this.pickerTarget.subject, this.pickerColor)
@@ -604,8 +775,68 @@ export default {
 	border-color: #111827;
 }
 
+.picker-wheel {
+	margin: 4rpx 0 16rpx;
+	padding: 16rpx 4rpx 4rpx;
+	border-top: 2rpx solid #f1f3f7;
+}
+
+.wheel-row {
+	display: flex;
+	align-items: center;
+	gap: 16rpx;
+	margin-bottom: 12rpx;
+}
+
+.wheel-label {
+	flex: 0 0 96rpx;
+	font-size: 24rpx;
+	font-weight: 700;
+	color: #6b7280;
+}
+
+.wheel-slider {
+	flex: 1;
+	margin: 0;
+}
+
+.hue-slider {
+	background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+	border-radius: 8rpx;
+}
+
+.wheel-value {
+	flex: 0 0 90rpx;
+	font-size: 24rpx;
+	font-weight: 700;
+	color: #1f2937;
+	text-align: right;
+}
+
 .picker-actions {
 	display: flex;
 	gap: 18rpx;
+}
+
+.mode-row {
+	display: flex;
+	gap: 16rpx;
+	margin-top: 8rpx;
+}
+
+.mode-chip {
+	flex: 1;
+	padding: 22rpx 0;
+	border-radius: 18rpx;
+	background: #f4f6fb;
+	text-align: center;
+	font-size: 28rpx;
+	font-weight: 800;
+	color: #6b7280;
+}
+
+.mode-chip.active {
+	background: #2979ff;
+	color: #ffffff;
 }
 </style>

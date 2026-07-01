@@ -15,6 +15,7 @@ import {
 	loadClearManualOnImport
 } from './schedule.js'
 import { parseScheduleImportText } from './scheduleImporter.js'
+import { syncSubjectsFromCourses } from './subjects.js'
 
 export const SHARE_PREFIX = 'ZF_SCHEDULE_SHARE_V1::'
 const LAST_IMPORT_CLIP_KEY = 'schedule_last_clip_share'
@@ -180,6 +181,7 @@ export function applyScheduleShare(parsed, options = {}) {
 	}
 
 	saveCourses(nextCourses)
+	syncSubjectsFromCourses(nextCourses)
 
 	const existingMeta = loadScheduleMeta() || {}
 	const incomingMeta = parsed.meta || {}

@@ -1,13 +1,15 @@
 <script>
-	import { requestNotificationPermissionOnFirstLaunch } from '@/utils/notification.js'
+	import { requestNotificationPermissionOnFirstLaunch, startReminderDaemon } from '@/utils/notification.js'
 
 	export default {
 		onLaunch: function() {
 			console.log('App Launch')
 			requestNotificationPermissionOnFirstLaunch()
+			startReminderDaemon()
 		},
 		onShow: function() {
 			console.log('App Show')
+			startReminderDaemon()
 		},
 		onHide: function() {
 			console.log('App Hide')

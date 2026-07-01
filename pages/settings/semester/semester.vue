@@ -49,9 +49,19 @@
 				<text class="input-unit">分钟</text>
 			</view>
 			<view class="form-row">
-				<text class="form-label">课间休息</text>
+				<text class="form-label">小课间休息</text>
 				<input class="num-input" type="number" v-model="form.breakMinutes" maxlength="3" />
 				<text class="input-unit">分钟</text>
+			</view>
+			<view class="form-row">
+				<text class="form-label">早大课间</text>
+				<input class="num-input" type="number" v-model="form.morningLongBreakMinutes" maxlength="3" />
+				<text class="input-unit">第2-3节之间，分钟</text>
+			</view>
+			<view class="form-row">
+				<text class="form-label">下午大课间</text>
+				<input class="num-input" type="number" v-model="form.afternoonLongBreakMinutes" maxlength="3" />
+				<text class="input-unit">第6-7节之间，分钟</text>
 			</view>
 
 			<view class="divider"></view>
@@ -105,11 +115,23 @@
 			</view>
 
 			<view class="preview-card">
-				<text class="preview-title">预览节次时间</text>
+				<view class="preview-head">
+					<text class="preview-title">预览与微调节次时间</text>
+					<button class="ghost-btn mini" @click="applyAutoTimes">按上方配置递推</button>
+				</view>
+				<text class="cell-desc">可单独调整每节课起止时间；保存后微调结果优先于自动递推时间。</text>
 				<view class="preview-list">
-					<view v-for="(item, index) in previewTimes" :key="index" class="preview-item">
+					<view v-for="(item, index) in previewTimes" :key="index" class="preview-item tune-item">
 						<text class="preview-num">第{{ index + 1 }}节</text>
-						<text class="preview-time">{{ item.start }} - {{ item.end }}</text>
+						<view class="tune-row">
+							<picker mode="time" :value="item.start" @change="onPeriodTimeChange(index, 'start', $event)">
+								<view class="tune-time">{{ item.start }}</view>
+							</picker>
+							<text class="preview-time">-</text>
+							<picker mode="time" :value="item.end" @change="onPeriodTimeChange(index, 'end', $event)">
+								<view class="tune-time">{{ item.end }}</view>
+							</picker>
+						</view>
 					</view>
 					<view v-if="!previewTimes.length" class="preview-empty">
 						<text>请至少设置一个时段的节数</text>
@@ -127,6 +149,7 @@ import {
 	loadPeriodConfig,
 	savePeriodConfig,
 	buildPeriodTimes,
+	buildAutoPeriodTimes,
 	mergePeriodConfig,
 	loadClearManualOnImport,
 	saveClearManualOnImport,
@@ -138,12 +161,15 @@ function toForm(config) {
 	return {
 		classMinutes: `${cfg.classMinutes}`,
 		breakMinutes: `${cfg.breakMinutes}`,
+		morningLongBreakMinutes: `${cfg.breakAfterMap[2]}`,
+		afternoonLongBreakMinutes: `${cfg.breakAfterMap[6]}`,
 		morningStart: cfg.morningStart,
 		morningCount: `${cfg.morningCount}`,
 		afternoonStart: cfg.afternoonStart,
 		afternoonCount: `${cfg.afternoonCount}`,
 		eveningStart: cfg.eveningStart,
-		eveningCount: `${cfg.eveningCount}`
+		eveningCount: `${cfg.eveningCount}`,
+		periodTimes: buildPeriodTimes(cfg)
 	}
 }
 
@@ -157,16 +183,9 @@ export default {
 	},
 	computed: {
 		previewTimes() {
-			return buildPeriodTimes({
-				classMinutes: Number(this.form.classMinutes),
-				breakMinutes: Number(this.form.breakMinutes),
-				morningStart: this.form.morningStart,
-				morningCount: Number(this.form.morningCount),
-				afternoonStart: this.form.afternoonStart,
-				afternoonCount: Number(this.form.afternoonCount),
-				eveningStart: this.form.eveningStart,
-				eveningCount: Number(this.form.eveningCount)
-			})
+			const autoTimes = buildAutoPeriodTimes(this.buildConfigFromForm(false))
+			const edited = Array.isArray(this.form.periodTimes) ? this.form.periodTimes : []
+			return autoTimes.map((item, index) => edited[index] || item)
 		}
 	},
 	onShow() {
@@ -201,6 +220,33 @@ export default {
 		onTimeChange(field, event) {
 			this.form[field] = event.detail.value
 		},
+		buildConfigFromForm(includePeriodTimes = true) {
+			return {
+				classMinutes: Number(this.form.classMinutes),
+				breakMinutes: Number(this.form.breakMinutes),
+				breakAfterMap: {
+					2: Number(this.form.morningLongBreakMinutes),
+					6: Number(this.form.afternoonLongBreakMinutes)
+				},
+				morningStart: this.form.morningStart,
+				morningCount: Number(this.form.morningCount),
+				afternoonStart: this.form.afternoonStart,
+				afternoonCount: Number(this.form.afternoonCount),
+				eveningStart: this.form.eveningStart,
+				eveningCount: Number(this.form.eveningCount),
+				periodTimes: includePeriodTimes ? this.previewTimes.map(item => ({ ...item })) : []
+			}
+		},
+		onPeriodTimeChange(index, field, event) {
+			const list = this.previewTimes.map(item => ({ ...item }))
+			if (!list[index]) return
+			list[index][field] = event.detail.value
+			this.form.periodTimes = list
+		},
+		applyAutoTimes() {
+			this.form.periodTimes = buildAutoPeriodTimes(this.buildConfigFromForm(false))
+			uni.showToast({ title: '已按配置递推', icon: 'none' })
+		},
 		validateForm() {
 			const classMinutes = Number(this.form.classMinutes)
 			if (!Number.isInteger(classMinutes) || classMinutes <= 0 || classMinutes > 240) {
@@ -209,7 +255,17 @@ export default {
 			}
 			const breakMinutes = Number(this.form.breakMinutes)
 			if (!Number.isInteger(breakMinutes) || breakMinutes < 0 || breakMinutes > 240) {
-				uni.showToast({ title: '课间休息应为 0-240 分钟', icon: 'none' })
+				uni.showToast({ title: '小课间应为 0-240 分钟', icon: 'none' })
+				return null
+			}
+			const morningLongBreakMinutes = Number(this.form.morningLongBreakMinutes)
+			const afternoonLongBreakMinutes = Number(this.form.afternoonLongBreakMinutes)
+			if (!Number.isInteger(morningLongBreakMinutes) || morningLongBreakMinutes < 0 || morningLongBreakMinutes > 240) {
+				uni.showToast({ title: '早大课间应为 0-240 分钟', icon: 'none' })
+				return null
+			}
+			if (!Number.isInteger(afternoonLongBreakMinutes) || afternoonLongBreakMinutes < 0 || afternoonLongBreakMinutes > 240) {
+				uni.showToast({ title: '下午大课间应为 0-240 分钟', icon: 'none' })
 				return null
 			}
 			const checks = [
@@ -224,16 +280,7 @@ export default {
 					return null
 				}
 			}
-			return {
-				classMinutes,
-				breakMinutes,
-				morningStart: this.form.morningStart,
-				morningCount: Number(this.form.morningCount),
-				afternoonStart: this.form.afternoonStart,
-				afternoonCount: Number(this.form.afternoonCount),
-				eveningStart: this.form.eveningStart,
-				eveningCount: Number(this.form.eveningCount)
-			}
+			return this.buildConfigFromForm(true)
 		},
 		savePeriodConfigForm() {
 			const valid = this.validateForm()
@@ -453,19 +500,58 @@ export default {
 	background: #f8fafc;
 }
 
+.preview-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16rpx;
+	margin-bottom: 8rpx;
+}
+
+
+
 .preview-title {
 	font-size: 26rpx;
 	font-weight: 700;
 	color: #1f2937;
-	display: block;
-	margin-bottom: 12rpx;
 }
+
+.ghost-btn.mini {
+	height: 60rpx;
+	line-height: 60rpx;
+	min-width: 180rpx;
+	font-size: 23rpx;
+	background: #eff6ff;
+	color: #2563eb;
+}
+
 
 .preview-list {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 14rpx;
 }
+
+.tune-item {
+	gap: 10rpx;
+}
+
+.tune-row {
+	display: flex;
+	align-items: center;
+	gap: 8rpx;
+}
+
+.tune-time {
+	padding: 8rpx 12rpx;
+	border-radius: 10rpx;
+	background: #eef2ff;
+	font-size: 24rpx;
+	font-weight: 700;
+	color: #1d4ed8;
+}
+
+
 
 .preview-item {
 	flex: 0 0 calc(50% - 7rpx);

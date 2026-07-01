@@ -2,8 +2,9 @@
 	<view class="page" :style="kbStyle">
 		<view
 			v-if="appearance.backgroundImage"
+			:key="backgroundLayerKey"
 			class="page-bg"
-			:style="{ backgroundImage: `url('${appearance.backgroundImage}')`, opacity: appearance.backgroundOpacity }"
+			:style="backgroundLayerStyle"
 		></view>
 		<view class="custom-nav">
 			<view class="nav-info" @click="showWeekPicker = !showWeekPicker">
@@ -27,10 +28,12 @@
 		<view v-if="showShareMenu || showImportMenu" class="menu-mask" @click="closeMenus">
 			<view v-if="showShareMenu" class="menu-card share-menu" @click.stop>
 				<text class="menu-title">分享课表</text>
+				<!-- #ifndef APP-PLUS -->
 				<button class="menu-item-btn" open-type="share" @click="onWxShareTap">
 					<text class="menu-item-title">微信分享</text>
 					<text class="menu-item-desc">直接发送给微信好友或群</text>
 				</button>
+				<!-- #endif -->
 				<view class="menu-item" @click="shareByClipboard">
 					<text class="menu-item-title">复制到剪切板</text>
 					<text class="menu-item-desc">把分享码复制到聊天框粘贴</text>
@@ -131,7 +134,7 @@
 						v-for="(p, pIdx) in swipePages"
 						:key="`page-${pIdx}-${p.week}`"
 						class="swipe-page"
-						:style="pageStyle"
+						:style="pageStyle(pIdx)"
 					>
 						<template v-if="!p.isPlaceholder">
 							<view class="header-row">
@@ -139,7 +142,7 @@
 									<text class="header-label">节次</text>
 								</view>
 								<view
-									v-for="(day, dIdx) in p.weekDays"
+									v-for="day in p.weekDays"
 									:key="`hd-${pIdx}-${day.label}`"
 									:class="['day-col', day.isToday ? 'is-today' : '']"
 								>
@@ -147,7 +150,15 @@
 									<text class="day-date">{{ day.date }}</text>
 								</view>
 							</view>
-							<scroll-view scroll-y class="schedule-scroll">
+							<scroll-view
+								class="schedule-scroll"
+								:scroll-top="scheduleScrollTop"
+								:scroll-with-animation="false"
+								:enable-flex="true"
+								:scroll-anchoring="false"
+								:scroll-y="!(courseDrag && courseDrag.active)"
+								@scroll="onScheduleScroll"
+							>
 								<view class="grid-body">
 									<view class="time-col body-time">
 										<view v-for="period in totalPeriods" :key="`time-${pIdx}-${period}`" class="time-cell">
@@ -174,10 +185,10 @@
 											:class="['course-block', courseDragClass(course)]"
 											:style="getCourseStyle(course)"
 											@click.stop="p.isCurrent && onCourseClick(course)"
-											@touchstart.stop="p.isCurrent && onCourseTouchStart(course, dIdx, $event)"
-											@touchmove.stop="p.isCurrent && onCourseTouchMove($event)"
-											@touchend.stop="p.isCurrent && onCourseTouchEnd($event)"
-											@touchcancel.stop="p.isCurrent && onCourseTouchEnd($event)"
+										@touchstart.stop="p.isCurrent && onCourseTouchStart(course, dIdx, $event)"
+										@touchmove.stop="p.isCurrent && onCourseTouchMove($event)"
+										@touchend.stop.prevent="p.isCurrent && onCourseTouchEnd($event)"
+										@touchcancel.stop.prevent="p.isCurrent && onCourseTouchEnd($event)"
 										>
 											<text class="course-name">{{ course.subject }}</text>
 											<template v-if="course.endPeriod - course.startPeriod + 1 >= 2">
@@ -225,48 +236,61 @@
 			</view>
 		</view>
 
-		<view v-if="activeCourse" class="course-mask" @click="activeCourse = null">
-			<view class="course-card" @click.stop>
-				<view class="course-card-head" :style="{ background: resolveColor(activeCourse) }">
-					<text class="course-card-title">{{ activeCourse.subject }}</text>
-					<text class="course-card-close" @click="activeCourse = null">×</text>
+		<view
+			v-if="courseDrag && courseDrag.active"
+			class="course-drag-ghost"
+			:style="courseDragGhostStyle()"
+		>
+			<text class="course-name">{{ courseDrag.course && courseDrag.course.subject }}</text>
+			<template v-if="courseDrag.span >= 2 && courseDrag.course">
+				<text v-if="courseDrag.course.location" class="course-location">{{ courseDrag.course.location }}</text>
+				<text v-if="courseDrag.course.teacher" class="course-teacher">{{ courseDrag.course.teacher }}</text>
+			</template>
+		</view>
+
+		<view
+			v-if="courseDrag && courseDrag.active"
+			class="course-drag-capture"
+			@touchstart.stop.prevent="onCourseCaptureTouchStart"
+			@touchmove.stop.prevent="onCourseTouchMove"
+			@touchend.stop.prevent="onCourseTouchEnd"
+			@touchcancel.stop.prevent="onCourseTouchEnd"
+		></view>
+
+		<!-- 临时存放点：仅在有课或手里拖着课时显示 -->
+		<view
+			v-if="tempStash.length > 0 || (courseDrag && courseDrag.active)"
+			:class="['temp-stash', tempStashExpanded ? 'expanded' : 'collapsed']"
+		>
+		<view v-if="!tempStashExpanded" class="temp-stash-bubble" @click.stop="toggleTempStash">
+			<image class="temp-stash-icon" src="/static/package.png" mode="aspectFit"></image>
+			<text v-if="tempStash.length > 0" class="temp-stash-count">{{ tempStash.length }}</text>
+		</view>
+			<scroll-view v-else scroll-x class="temp-stash-scroll" :show-scrollbar="false">
+				<view class="temp-stash-row">
+					<view
+						v-for="(item, idx) in tempStash"
+						:key="`stash-${idx}-${item.course && item.course.id}`"
+						class="temp-stash-chip"
+						:style="{ background: resolveColor(item.course) }"
+						@touchstart.stop.prevent="onStashItemTouchStart(item, $event)"
+						@touchmove.stop.prevent="onCourseTouchMove"
+						@touchend.stop.prevent="onCourseTouchEnd"
+						@touchcancel.stop.prevent="onCourseTouchEnd"
+					>
+						<text class="temp-stash-chip-name">{{ item.course && item.course.subject }}</text>
+						<text class="temp-stash-chip-week">第{{ item.originWeek }}周</text>
+					</view>
+					<view v-if="tempStash.length === 0" class="temp-stash-empty">
+						<text>暂无课程</text>
+					</view>
 				</view>
-				<view class="course-card-body">
-					<view class="course-row">
-						<text class="course-label">教师</text>
-						<text class="course-value">{{ activeCourse.teacher || '未知' }}</text>
-					</view>
-					<view class="course-row">
-						<text class="course-label">教室</text>
-						<text class="course-value">{{ activeCourse.location || '未知' }}</text>
-					</view>
-					<view class="course-row">
-						<text class="course-label">星期</text>
-						<text class="course-value">星期{{ weekDayName(activeCourse.dayOfWeek) }} 第{{ activeCourse.startPeriod }}-{{ activeCourse.endPeriod }}节</text>
-					</view>
-					<view class="course-row">
-						<text class="course-label">周次</text>
-						<text class="course-value">{{ activeCourse.weekText || (activeCourse.weeks.join(',') + '周') }}</text>
-					</view>
-					<view v-if="activeCourse.note" class="course-row">
-						<text class="course-label">备注</text>
-						<text class="course-value">{{ activeCourse.note }}</text>
-					</view>
-					<button class="course-delete-btn" @click="openDeleteOptions">删除</button>
-				</view>
+			</scroll-view>
+			<view v-if="tempStashExpanded" class="temp-stash-close" @click.stop="toggleTempStash">
+				<text>收起</text>
 			</view>
 		</view>
 
-		<view v-if="showDeleteOptions && activeCourse" class="delete-options-mask" @click="closeDeleteOptions">
-			<view class="delete-options-card" @click.stop>
-				<text class="delete-options-title">选择删除范围</text>
-				<text class="delete-options-subtitle">{{ activeCourse.subject || '这节课' }}</text>
-				<button class="delete-option-btn danger" @click="confirmDeleteCourse('single')">删除这节课</button>
-				<button class="delete-option-btn" @click="confirmDeleteCourse('day')">删除每一周这一天的课</button>
-				<button class="delete-option-btn" @click="confirmDeleteCourse('teacher')">删除这个老师的课</button>
-				<button class="delete-option-btn cancel" @click="closeDeleteOptions">取消</button>
-			</view>
-		</view>
 
 		<view v-if="showAddPanel" class="add-mask" @click="closeAddPanel">
 			<view class="add-card" @click.stop>
@@ -341,12 +365,15 @@
 						<text class="add-form-label">教室</text>
 						<input class="add-form-input" type="text" v-model="createForm.location" placeholder="可选" />
 					</view>
-					<view class="add-form-toggle" @click="createForm.applyAllWeeks = !createForm.applyAllWeeks">
-						<view :class="['add-form-checkbox', createForm.applyAllWeeks ? 'checked' : '']">
-							<text v-if="createForm.applyAllWeeks" class="add-form-check">✓</text>
-						</view>
-						<text class="add-form-toggle-text">每周该节次都加上（不勾选则只加本周）</text>
+				<view class="add-form-weekmode">
+					<text class="add-form-toggle-text">重复方式</text>
+					<view class="week-mode-row">
+						<view :class="['week-mode-chip', createForm.weekMode === 'current' ? 'active' : '']" @click="createForm.weekMode = 'current'">仅本周</view>
+						<view :class="['week-mode-chip', createForm.weekMode === 'all' ? 'active' : '']" @click="createForm.weekMode = 'all'">每周</view>
+						<view :class="['week-mode-chip', createForm.weekMode === 'odd' ? 'active' : '']" @click="createForm.weekMode = 'odd'">单周</view>
+						<view :class="['week-mode-chip', createForm.weekMode === 'even' ? 'active' : '']" @click="createForm.weekMode = 'even'">双周</view>
 					</view>
+				</view>
 					<button class="add-form-submit" @click="submitCreateForm">添加到课表</button>
 				</view>
 			</view>
@@ -405,6 +432,7 @@ import {
 	resolveCourseColor,
 	loadAppearance
 } from '@/utils/schedule.js'
+import { loadSubjects } from '@/utils/subjects.js'
 import { importScheduleFromZf, importScheduleFromText, ZF_LOGIN_URL } from '@/utils/scheduleImporter.js'
 import {
 	buildScheduleShareText,
@@ -430,12 +458,10 @@ export default {
 		return {
 			courses: [],
 			meta: {},
-			semesterStart: '',
-			selectedWeek: 1,
-			currentWeek: 1,
-			activeCourse: null,
-			showDeleteOptions: false,
-			showWeekPicker: false,
+		semesterStart: '',
+		selectedWeek: 1,
+		currentWeek: 1,
+		showWeekPicker: false,
 			periodConfig,
 			totalPeriods: getTotalPeriodCount(periodConfig),
 			totalWeeks: TOTAL_WEEKS,
@@ -457,7 +483,7 @@ export default {
 				subject: '',
 				teacher: '',
 				location: '',
-				applyAllWeeks: true
+				weekMode: 'current'
 			},
 			// 顶部分享 / 导入菜单
 			showShareMenu: false,
@@ -477,13 +503,33 @@ export default {
 			swipeAnimating: false,    // 是否处于切换动画/回弹中
 			swipePendingDirection: 0, // 当前正在动画提交的方向：>0 下一周，<0 上一周，0 仅回弹
 			swipeCommitTimer: null,    // 动画完成的定时器，用于支持中途打断
-			// 待新增格子的拖拽状态
-			pendingDrag: null, // { edge: 'top'|'bottom', startY, baseStart, baseEnd }
-			// 已添加课程的"长按拖动"状态
-			courseDrag: null, // { courseId, startX, startY, dx, dy, originDay, originStart, span, longPressTimer, active, cellPx, colPx, suppressClick }
-			// 重叠课程闪烁时钟（毫秒时间戳，驱动 sin² 透明度计算）
-			blinkTick: 0,
-			__blinkTimer: null
+			swipeAnimationMs: 160,
+			swipeCurrentAnimationMs: 160,
+			swipeTransitionProgress: 0,
+			swipeFading: false,
+			swipeFramePending: false,
+			swipeFrameOffset: 0,
+		// 课表滚动与课程拖拽边缘自动滚动
+		scheduleScrollTop: 0,
+		scheduleScrollTopApplied: 0,
+		scheduleScrollTopOffset: 0,
+		courseDragAutoScrollTimer: null,
+
+		courseDragLastTouch: null,
+		courseDragScrollEdge: '',
+		courseDragScrollAt: 0,
+		// 待新增格子的拖拽状态
+		pendingDrag: null, // { edge: 'top'|'bottom', startY, baseStart, baseEnd }
+		// 已添加课程的"长按拖动"状态
+		courseDrag: null, // { courseId, course, startX, startY, currentX, currentY, dx, dy, originWeek, targetWeek, originDay, originStart, span, longPressTimer, active, cellPx, colPx, scrollCompensationPx, fromStash, suppressClick }
+		// 重叠课程闪烁时钟（毫秒时间戳，驱动 sin² 透明度计算）
+		blinkTick: 0,
+		__blinkTimer: null,
+		// 周页缓存失效版本号（响应式触发 swipePages 重算）
+		weekPageCacheVersion: 0,
+		// 临时存放点：[{ course, originWeek }]，持久化
+		tempStash: [],
+		tempStashExpanded: false
 		}
 	},
 	computed: {
@@ -496,52 +542,28 @@ export default {
 		weekDays() {
 			return this.buildWeekDays(this.selectedWeek)
 		},
-		// 上一周 / 当前周 / 下一周三页数据，用于横向滑动
 		swipePages() {
-			const cur = this.selectedWeek
-			const prevWeek = cur - 1
-			const nextWeek = cur + 1
-			const prev = prevWeek >= 1
-				? {
-					week: prevWeek,
-					weekDays: this.buildWeekDays(prevWeek),
-					coursesByDay: buildWeekTable(this.courses, prevWeek),
-					isCurrent: false,
-					isPlaceholder: false
-				}
-				: { week: 0, weekDays: [], coursesByDay: {}, isCurrent: false, isPlaceholder: true }
-			const center = {
-				week: cur,
-				weekDays: this.buildWeekDays(cur),
-				coursesByDay: this.coursesByDay,
-				isCurrent: true,
-				isPlaceholder: false
-			}
-			const next = nextWeek <= this.totalWeeks
-				? {
-					week: nextWeek,
-					weekDays: this.buildWeekDays(nextWeek),
-					coursesByDay: buildWeekTable(this.courses, nextWeek),
-					isCurrent: false,
-					isPlaceholder: false
-				}
-				: { week: 0, weekDays: [], coursesByDay: {}, isCurrent: false, isPlaceholder: true }
-			return [prev, center, next]
+			// 引用 weekPageCacheVersion 确保缓存失效时（同周移动）触发重算
+			void this.weekPageCacheVersion
+			return [
+				this.getWeekPage(this.selectedWeek - 1, false),
+				this.getWeekPage(this.selectedWeek, true),
+				this.getWeekPage(this.selectedWeek + 1, false)
+			]
 		},
-		// 滑动条/单页样式
-		pageStyle() {
-			const w = this.swipeViewportWidth || 0
-			return w > 0 ? `width:${w}px;` : 'width:100%;'
-		},
+
 		trackStyle() {
 			const w = this.swipeViewportWidth || 0
 			// 三页并排，初始位置在第二页（中心），手指拖动时再叠加 swipeOffset
-			const baseTranslate = w > 0 ? -w : 0
+			if (w <= 0) {
+				return 'width:300%;transform:translate3d(-33.333333%,0,0);transition:none;'
+			}
+			const baseTranslate = -w
 			const x = baseTranslate + this.swipeOffset
 			const transition = this.swipeAnimating
-				? 'transform 0.22s cubic-bezier(0.22, 0.61, 0.36, 1)'
+				? `transform ${this.swipeCurrentAnimationMs}ms cubic-bezier(0.2, 0, 0, 1)`
 				: 'none'
-			return `width:${w * 3}px;transform:translateX(${x}px);transition:${transition};`
+			return `width:${w * 3}px;transform:translate3d(${x}px,0,0);transition:${transition};`
 		},
 		weekTitle() {
 			return `第 ${this.selectedWeek} 周`
@@ -554,6 +576,20 @@ export default {
 				return `${this.meta.xnm}学年 学期${this.meta.xqm}`
 			}
 			return this.semesterStart ? `开学：${this.semesterStart}` : '尚未设置开学日期'
+		},
+		backgroundLayerKey() {
+			const image = this.appearance && this.appearance.backgroundImage
+			const opacity = this.appearance && this.appearance.backgroundOpacity
+			const updatedAt = this.appearance && this.appearance.updatedAt
+			return `${image || ''}|${opacity || 0}|${updatedAt || 0}`
+		},
+		backgroundLayerStyle() {
+			const image = this.appearance && this.appearance.backgroundImage
+			if (!image) return {}
+			return {
+				backgroundImage: `url('${image}')`,
+				opacity: this.appearance.backgroundOpacity
+			}
 		},
 		// 当前周每个 (day, period) 是否被占用，用于扩展时判断
 		occupancyMap() {
@@ -652,18 +688,22 @@ export default {
 	onShow() {
 		this.refresh()
 		this.checkClipboardForShare()
+		this.loadTempStash()
 		this.startBlinkTimerIfNeeded()
 	},
 	onHide() {
 		this.stopBlinkTimer()
 	},
 	mounted() {
+		this.__weekPageCache = {}
 		this.swipeViewportWidth = this.getViewportWidth()
+		this.$nextTick(() => this.measureScheduleScrollTop())
 		// #ifdef H5
 		window.addEventListener('message', this.handleWebImportMessage)
 		this.__onResize = () => {
 			this.swipeViewportWidth = this.getViewportWidth()
 		}
+
 		window.addEventListener('resize', this.__onResize)
 		// #endif
 		this.startBlinkTimerIfNeeded()
@@ -677,6 +717,9 @@ export default {
 			clearTimeout(this.swipeCommitTimer)
 			this.swipeCommitTimer = null
 		}
+		this.swipeFramePending = false
+		this.stopCourseDragAutoScroll()
+		this.__weekPageCache = {}
 		this.stopBlinkTimer()
 	},
 	onBackPress(options) {
@@ -705,10 +748,6 @@ export default {
 			this.showWeekPicker = false
 			return true
 		}
-		if (this.activeCourse) {
-			this.activeCourse = null
-			return true
-		}
 		if (this.showWebImport) {
 			this.closeWebImport()
 			return true
@@ -722,31 +761,123 @@ export default {
 		return false
 	},
 	methods: {
+		// 单页样式：根据位置和当前切换进度控制宽度与透明度
+		pageStyle(pageIndex) {
+			const w = this.swipeViewportWidth || 0
+			const baseWidth = w > 0 ? `${w}px` : '33.333333%'
+			const active = pageIndex === 1
+			let opacity = 1
+			if (this.swipeAnimating && this.swipePendingDirection) {
+				const progress = Math.max(0, Math.min(1, this.swipeTransitionProgress))
+				if (this.swipePendingDirection > 0) {
+					opacity = pageIndex === 1 ? 1 - progress : pageIndex === 2 ? Math.max(progress, 0.08) : 0.08
+				} else {
+					opacity = pageIndex === 1 ? 1 - progress : pageIndex === 0 ? Math.max(progress, 0.08) : 0.08
+				}
+			} else if (this.swipeTracking) {
+				const offset = this.swipeViewportWidth ? this.swipeOffset / this.swipeViewportWidth : 0
+				if (pageIndex === 1) {
+					opacity = 1 - Math.min(Math.abs(offset) * 0.55, 0.5)
+				} else if (pageIndex === 0 && offset > 0) {
+					opacity = Math.min(offset * 0.85, 1)
+				} else if (pageIndex === 2 && offset < 0) {
+					opacity = Math.min(Math.abs(offset) * 0.85, 1)
+				} else {
+					opacity = active ? 1 : 0.08
+				}
+			}
+			const transition = this.swipeAnimating && this.swipePendingDirection
+				? `opacity ${this.swipeCurrentAnimationMs}ms cubic-bezier(0.2, 0, 0, 1)`
+				: 'none'
+			return `width:${baseWidth};opacity:${Math.max(0.08, Math.min(1, opacity))};transition:${transition};`
+		},
 		refresh() {
 			this.courses = loadCourses()
 			this.meta = loadScheduleMeta()
 			this.semesterStart = loadSemesterStartDate()
 			this.periodConfig = loadPeriodConfig()
 			this.periodTimes = buildPeriodTimes(this.periodConfig)
-			this.totalPeriods = getTotalPeriodCount(this.periodConfig)
+			this.totalPeriods = Math.max(getTotalPeriodCount(this.periodConfig), this.getMaxCoursePeriod(this.courses))
 			this.courseColorMap = loadCourseColorMap()
 			this.appearance = loadAppearance()
 			this.currentWeek = calcCurrentWeek(this.semesterStart)
+			this.resetScheduleRuntimeState()
 			if (!this.selectedWeek || this.selectedWeek < 1 || this.selectedWeek > this.totalWeeks) {
 				this.selectedWeek = this.currentWeek
 			}
 			if (this.semesterStart && this.selectedWeek === 1 && this.currentWeek > 1) {
 				this.selectedWeek = this.currentWeek
 			}
-			// 课程或配置变化后，重建分组缓存并按需启停闪烁时钟
+			this.startBlinkTimerIfNeeded()
+		},
+		applyScheduleCourses(list) {
+			const nextList = Array.isArray(list) ? list : []
+			saveCourses(nextList)
+			this.courses = nextList.slice()
+			this.totalPeriods = Math.max(getTotalPeriodCount(this.periodConfig), this.getMaxCoursePeriod(this.courses))
+			this.resetScheduleRuntimeState()
+			this.$nextTick(() => {
+				this.startBlinkTimerIfNeeded()
+			})
+		},
+		resetScheduleRuntimeState() {
+			this.invalidateWeekPageCache()
 			this.__overlapMapCache = null
 			this.__overlapMapCacheKey = ''
-			this.startBlinkTimerIfNeeded()
+			this.__overlapLayerCache = null
+			this.__overlapLayerCacheKey = ''
+			this.__subjectOrderMap = null
 		},
 		periodTimeText(period) {
 			const time = this.periodTimes[period - 1]
 			if (!time) return ''
 			return `${time.start}\n${time.end}`
+		},
+		invalidateWeekPageCache() {
+			this.__weekPageCache = {}
+			// 递增版本号强制 swipePages 重算（修复同周移动后重合不刷新）
+			this.weekPageCacheVersion = (this.weekPageCacheVersion || 0) + 1
+		},
+		getWeekPage(week, isCurrent) {
+			if (week < 1 || week > this.totalWeeks) {
+				return { week: 0, weekDays: [], coursesByDay: {}, isCurrent: false, isPlaceholder: true }
+			}
+			if (!this.__weekPageCache) this.__weekPageCache = {}
+			let page = this.__weekPageCache[week]
+			if (!page) {
+				page = {
+					week,
+					weekDays: this.buildWeekDays(week),
+					coursesByDay: buildWeekTable(this.courses, week),
+					isPlaceholder: false
+				}
+				this.__weekPageCache[week] = page
+			}
+			return { ...page, isCurrent }
+		},
+		getMaxCoursePeriod(courses = []) {
+			return courses.reduce((max, course) => {
+				const end = parseInt(course && course.endPeriod, 10)
+				return end > max ? end : max
+			}, 0)
+		},
+		formatWeeksText(weeks = []) {
+			const sortedWeeks = Array.from(new Set(weeks.map(n => parseInt(n, 10)).filter(n => n > 0))).sort((a, b) => a - b)
+			if (!sortedWeeks.length) return ''
+			const ranges = []
+			let start = sortedWeeks[0]
+			let prev = sortedWeeks[0]
+			for (let i = 1; i <= sortedWeeks.length; i++) {
+				const week = sortedWeeks[i]
+				if (week === prev + 1) {
+					prev = week
+					continue
+				}
+				ranges.push(start === prev ? `${start}周` : `${start}-${prev}周`)
+				start = week
+				prev = week
+			}
+			return ranges.join(',')
 		},
 		getCourseStyle(course) {
 			const span = course.endPeriod - course.startPeriod + 1
@@ -754,21 +885,31 @@ export default {
 			const height = span * 124 - 16
 			const color = resolveCourseColor(course.subject, course.color, this.courseColorMap)
 			const baseOpacity = this.appearance.cardOpacity
-			let extra = ''
-			// 拖拽中的课程：跟随手指偏移，并保持完全可见，不参与闪烁
+			// 拖拽中的原课程留在原位半透明，真正跟手显示由全局浮层负责，避免跨周重渲染时消失
 			const isDragging =
 				this.courseDrag &&
 				this.courseDrag.active &&
 				this.courseDrag.courseId === course.id
 			if (isDragging) {
-				const dx = this.courseDrag.dx || 0
-				const dy = this.courseDrag.dy || 0
-				extra = `transform:translate(${dx}px, ${dy}px);`
-				return `top:${top}rpx;height:${height}rpx;background:${color};opacity:${baseOpacity};${extra}`
+				return `top:${top}rpx;height:${height}rpx;background:${color};opacity:${baseOpacity * 0.35};`
 			}
-			// 重叠分组闪烁
+			// 重叠分组渲染
 			const overlap = this.getOverlapInfo(course)
 			if (overlap && overlap.groupSize > 1) {
+				const mode = this.appearance.overlapDisplayMode || 'switch'
+				if (mode === 'overlap') {
+					// 重叠显示：按学科列表顺序分层，第1个学科最上层（最不透明），越靠后越透明
+					const minOpacity = Math.max(0, Math.min(0.5, Number(this.appearance.overlapMinOpacity) || 0.1))
+					const n = overlap.groupSize
+					// 学科顺序由 getOverlapLayerIndex 内部通过 getSubjectOrderIndex 计算
+					const layerIdx = this.getOverlapLayerIndex(course, overlap)
+					const ratio = n > 1 ? layerIdx / (n - 1) : 0
+					const alpha = 1 - ratio * (1 - minOpacity)
+					const finalOpacity = baseOpacity * alpha
+					const zIndex = n - layerIdx // 上层 z-index 更高
+					return `top:${top}rpx;height:${height}rpx;background:${color};opacity:${finalOpacity};z-index:${zIndex + 5};`
+				}
+				// 切换显示（默认）：闪烁轮播
 				const alpha = this.computeOverlapAlpha(overlap)
 				const finalOpacity = baseOpacity * alpha
 				// 非激活课程不可点击，避免点到隐藏的下方课程
@@ -777,10 +918,197 @@ export default {
 			}
 			return `top:${top}rpx;height:${height}rpx;background:${color};opacity:${baseOpacity};`
 		},
+		// 获取学科在学科列表中的顺序索引（用于重叠显示图层）
+		getSubjectOrderIndex(subject) {
+			if (!this.__subjectOrderMap) {
+				this.__subjectOrderMap = this.buildSubjectOrderMap()
+			}
+			const key = `${subject || ''}`.trim()
+			return this.__subjectOrderMap[key] !== undefined ? this.__subjectOrderMap[key] : 999
+		},
+		buildSubjectOrderMap() {
+			const map = {}
+			try {
+				const subjects = loadSubjects()
+				;(Array.isArray(subjects) ? subjects : []).forEach((item, idx) => {
+					if (item && item.name) map[`${item.name}`.trim()] = idx
+				})
+			} catch (e) {}
+			return map
+		},
+		// 重叠组内按学科顺序计算的图层索引（0=最上层）
+		getOverlapLayerIndex(course, overlap) {
+			if (!this.__overlapLayerCache || this.__overlapLayerCacheKey !== this.__coursesByDayKey()) {
+				this.__overlapLayerCache = this.buildOverlapLayerMap()
+				this.__overlapLayerCacheKey = this.__coursesByDayKey()
+			}
+			return this.__overlapLayerCache[course.id] !== undefined ? this.__overlapLayerCache[course.id] : overlap.groupIndex || 0
+		},
+		// 按学科顺序为重叠组内课程分配图层索引
+		buildOverlapLayerMap() {
+			const map = {}
+			const byDay = this.coursesByDay || {}
+			for (let d = 1; d <= 7; d++) {
+				const list = byDay[d] || []
+				if (list.length < 2) continue
+				const sorted = list.slice().sort((a, b) => {
+					if (a.startPeriod !== b.startPeriod) return a.startPeriod - b.startPeriod
+					return String(a.id).localeCompare(String(b.id))
+				})
+				const parent = sorted.map((_, i) => i)
+				const find = (x) => (parent[x] === x ? x : (parent[x] = find(parent[x])))
+				const union = (a, b) => {
+					const ra = find(a), rb = find(b)
+					if (ra !== rb) parent[ra] = rb
+				}
+				for (let i = 0; i < sorted.length; i++) {
+					for (let j = i + 1; j < sorted.length; j++) {
+						const a = sorted[i], b = sorted[j]
+						if (a.startPeriod <= b.endPeriod && b.startPeriod <= a.endPeriod) {
+							union(i, j)
+						}
+					}
+				}
+				const groups = {}
+				sorted.forEach((c, i) => {
+					const r = find(i)
+					if (!groups[r]) groups[r] = []
+					groups[r].push(c)
+				})
+				Object.values(groups).forEach(g => {
+					if (g.length <= 1) return
+					// 按学科列表顺序排序，列表第1个学科 = layerIdx 0（最上层最不透明）
+					const sortedBySubject = g.slice().sort((a, b) => {
+						const ia = this.getSubjectOrderIndex(a.subject)
+						const ib = this.getSubjectOrderIndex(b.subject)
+						if (ia !== ib) return ia - ib
+						return String(a.id).localeCompare(String(b.id))
+					})
+					sortedBySubject.forEach((c, idx) => {
+						map[c.id] = idx
+					})
+				})
+			}
+			return map
+		},
 		courseDragClass(course) {
 			if (!this.courseDrag || !this.courseDrag.active) return ''
 			if (this.courseDrag.courseId !== course.id) return ''
-			return 'is-dragging'
+			return 'is-drag-origin'
+		},
+		onScheduleScroll(e) {
+			const scrollTop = e && e.detail ? Number(e.detail.scrollTop) || 0 : 0
+			this.scheduleScrollTop = scrollTop
+			this.scheduleScrollTopApplied = scrollTop
+			this.measureScheduleScrollTop()
+		},
+		measureScheduleScrollTop() {
+			try {
+				uni.createSelectorQuery()
+					.in(this)
+					.select('.swipe-page:nth-child(2) .schedule-scroll')
+					.boundingClientRect(rect => {
+						if (rect && typeof rect.top === 'number') {
+							this.scheduleScrollTopOffset = rect.top
+						}
+					})
+					.exec()
+			} catch (e) {}
+		},
+		getScheduleScrollTopOffset() {
+			if (this.scheduleScrollTopOffset > 0) return this.scheduleScrollTopOffset
+			const w = this.swipeViewportWidth || this.getViewportWidth()
+			return w ? (w / 750) * 150 + (w / 750) * 78 : 0
+		},
+		getScheduleScrollMax() {
+			const cellPx = this.getPendingCellHeightPx()
+
+			const contentHeight = cellPx * this.totalPeriods
+			let viewportHeight = 0
+			try {
+				const info = uni.getSystemInfoSync()
+				const navPx = (this.getViewportWidth() / 750) * 150
+				const headerPx = (this.getViewportWidth() / 750) * 78
+				viewportHeight = Math.max(0, (info.windowHeight || 0) - navPx - headerPx)
+			} catch (e) {}
+			return Math.max(0, Math.round(contentHeight - viewportHeight))
+		},
+		startCourseDragAutoScroll() {
+			if (this.courseDragAutoScrollTimer) return
+			this.courseDragAutoScrollTimer = setInterval(() => {
+				if (!this.courseDrag || !this.courseDrag.active || !this.courseDragLastTouch) {
+					this.stopCourseDragAutoScroll()
+					return
+				}
+				this.maybeAutoScrollDuringCourseDrag(this.courseDragLastTouch)
+			}, 16)
+		},
+		stopCourseDragAutoScroll() {
+			if (this.courseDragAutoScrollTimer) {
+				clearInterval(this.courseDragAutoScrollTimer)
+				this.courseDragAutoScrollTimer = null
+			}
+			this.courseDragLastTouch = null
+			this.courseDragScrollEdge = ''
+			this.courseDragScrollAt = 0
+		},
+		maybeAutoScrollDuringCourseDrag(touch) {
+			const drag = this.courseDrag
+			if (!drag || !drag.active || !touch) return
+			let h = 0
+			try { h = uni.getSystemInfoSync().windowHeight || 0 } catch (e) {}
+			if (!h) return
+			const edgeSize = Math.max(44, h * 0.12)
+			let edge = ''
+			let speed = 0
+			if (touch.clientY <= edgeSize) {
+				edge = 'top'
+				speed = -Math.ceil(2 + ((edgeSize - touch.clientY) / edgeSize) * 6)
+			} else if (touch.clientY >= h - edgeSize) {
+				edge = 'bottom'
+				speed = Math.ceil(2 + ((touch.clientY - (h - edgeSize)) / edgeSize) * 6)
+			}
+			if (!edge) {
+				this.courseDragScrollEdge = ''
+				this.courseDragScrollAt = 0
+				return
+			}
+			const now = Date.now()
+			if (this.courseDragScrollEdge !== edge) {
+				this.courseDragScrollEdge = edge
+				this.courseDragScrollAt = now
+				return
+			}
+			if (!this.courseDragScrollAt) {
+				this.courseDragScrollAt = now
+				return
+			}
+			if (now - this.courseDragScrollAt < 1000) return
+			const maxScrollTop = this.getScheduleScrollMax()
+			const nextTop = Math.max(0, Math.min(maxScrollTop, this.scheduleScrollTopApplied + speed))
+			if (nextTop === this.scheduleScrollTopApplied) return
+			// 滚动补偿：累计到 scrollCompensationPx，不再修改 startY，避免反馈环路导致抖动
+			const deltaPx = nextTop - this.scheduleScrollTopApplied
+			const compBefore = drag.scrollCompensationPx || 0
+			this.scheduleScrollTopApplied = nextTop
+			this.scheduleScrollTop = nextTop
+			this.courseDrag = {
+				...drag,
+				scrollCompensationPx: compBefore + deltaPx,
+				currentY: touch.clientY
+			}
+		},
+		courseDragGhostStyle() {
+			const drag = this.courseDrag
+			if (!drag || !drag.course) return ''
+			const width = drag.colPx || 0
+			const height = drag.span * 124 - 16
+			const color = resolveCourseColor(drag.course.subject, drag.course.color, this.courseColorMap)
+			const scrollComp = drag.scrollCompensationPx || 0
+			const left = (drag.currentX || drag.startX || 0) - width / 2
+			const top = (drag.currentY || drag.startY || 0) - (height * this.getViewportWidth() / 750) / 2 + scrollComp
+			const safeWidth = width > 0 ? `${Math.max(48, width - 10)}px` : 'calc((100vw - 80rpx) / 7 - 10rpx)'
+			return `left:0;top:0;width:${safeWidth};height:${height}rpx;background:${color};opacity:${this.appearance.cardOpacity};transform:translate3d(${left}px,${top}px,0);`
 		},
 		// === 重叠课程闪烁：分组 + sin² 透明度 ===
 		// 当前可视周的"按天的重叠分组"映射：courseId -> { groupSize, groupIndex }
@@ -845,28 +1173,29 @@ export default {
 			return parts.join('|')
 		},
 		// 计算重叠组内某课程当前帧的 alpha（0~1）
-		// 总周期 = overlapBlinkCycleMs；满显示阶段 70%，前 15% 淡入，后 15% 淡出
-		// 淡入淡出采用 sin²(x·π/2) 形态保证柔和
+		// 总周期 = overlapSwitchFrequency；满显示阶段 70%，前 15% 淡入，后 15% 淡出
+		// 淡入淡出最低 alpha 使用 overlapMinOpacity（而非 0），淡出阶段不低于该值
 		computeOverlapAlpha({ groupSize, groupIndex }) {
 			const cycleMs = Math.max(
 				1000,
-				Math.min(10000, Number(this.appearance.overlapBlinkCycleMs) || 5000)
+				Math.min(10000, Number(this.appearance.overlapSwitchFrequency || this.appearance.overlapBlinkCycleMs) || 2000)
 			)
+			const minOpacity = Math.max(0, Math.min(0.5, Number(this.appearance.overlapMinOpacity) || 0))
 			const totalMs = cycleMs * groupSize
 			const t = (this.blinkTick % totalMs + totalMs) % totalMs
 			const activeIdx = Math.floor(t / cycleMs)
-			if (activeIdx !== groupIndex) return 0
+			if (activeIdx !== groupIndex) return minOpacity
 			const phase = (t - activeIdx * cycleMs) / cycleMs // 0~1
 			const fade = 0.15
 			if (phase < fade) {
 				const x = phase / fade // 0~1
 				const s = Math.sin(x * Math.PI / 2)
-				return s * s
+				return minOpacity + (1 - minOpacity) * (s * s)
 			}
 			if (phase > 1 - fade) {
 				const x = (1 - phase) / fade // 1~0
 				const s = Math.sin(x * Math.PI / 2)
-				return s * s
+				return minOpacity + (1 - minOpacity) * (s * s)
 			}
 			return 1
 		},
@@ -900,82 +1229,31 @@ export default {
 			if (!course) return ''
 			return resolveCourseColor(course.subject, course.color, this.courseColorMap)
 		},
-		openCourse(course) {
-			this.activeCourse = course
-			this.showDeleteOptions = false
-		},
-		openDeleteOptions() {
-			if (!this.activeCourse) return
-			this.showDeleteOptions = true
-		},
-		closeDeleteOptions() {
-			this.showDeleteOptions = false
-		},
-		confirmDeleteCourse(type) {
-			const course = this.activeCourse
-			if (!course) return
-			const teacher = `${course.teacher || ''}`.trim()
-			if (type === 'teacher' && !teacher) {
-				uni.showToast({ title: '这节课没有老师信息', icon: 'none' })
-				return
-			}
-			const titleMap = {
-				single: '删除这节课',
-				day: '删除每周这一天',
-				teacher: '删除这个老师'
-			}
-			const contentMap = {
-				single: `确定删除「${course.subject || '这节课'}」吗？`,
-				day: `确定删除每一周星期${this.weekDayName(course.dayOfWeek)}第${course.startPeriod}-${course.endPeriod}节的课吗？`,
-				teacher: `确定删除「${teacher}」老师的所有课程吗？`
-			}
-			uni.showModal({
-				title: titleMap[type] || '删除课程',
-				content: contentMap[type] || '确定删除课程吗？',
-				confirmText: '删除',
-				confirmColor: '#ef4444',
-				success: res => {
-					if (!res.confirm) return
-					this.applyDeleteCourse(type, course)
-				}
-			})
-		},
-		applyDeleteCourse(type, course) {
-			const teacher = `${course.teacher || ''}`.trim()
-			const list = loadCourses().filter(item => {
-				if (type === 'single') return item.id !== course.id
-				if (type === 'day') {
-					return !(
-						item.dayOfWeek === course.dayOfWeek &&
-						item.startPeriod === course.startPeriod &&
-						item.endPeriod === course.endPeriod
-					)
-				}
-				if (type === 'teacher') return `${item.teacher || ''}`.trim() !== teacher
-				return true
-			})
-			saveCourses(list)
-			this.courses = list
-			this.activeCourse = null
-			this.showDeleteOptions = false
-			this.__overlapMapCache = null
-			this.__overlapMapCacheKey = ''
-			this.startBlinkTimerIfNeeded()
-			uni.showToast({ title: '已删除', icon: 'success' })
-		},
-		// 普通点击：拖动激活过则吃掉本次 click，否则打开课程详情
-		onCourseClick(course) {
-			if (this.courseDrag && this.courseDrag.suppressClick) {
-				this.courseDrag = null
-				return
-			}
+	openCourse(course) {
+		// 已迁移到独立详情页，保留方法避免外部引用报错
+		if (!course || !course.id) return
+		this.openCourseDetail(course)
+	},
+	// 普通点击：拖动激活过则吃掉本次 click，否则进入课程详情页
+	onCourseClick(course) {
+		if (this.courseDrag && this.courseDrag.suppressClick) {
 			this.courseDrag = null
-			this.openCourse(course)
+			return
+		}
+		this.courseDrag = null
+		this.openCourseDetail(course)
+	},
+	openCourseDetail(course) {
+			if (!course || !course.id) return
+			uni.navigateTo({
+				url: `/pages/schedule/detail?courseId=${encodeURIComponent(course.id)}`
+			})
 		},
 		// 长按 -> 拖动课程到其他时段（允许重叠）
 		onCourseTouchStart(course, dayIndex, e) {
 			const touch = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0])
 			if (!touch) return
+			this.onSwipeStart(e)
 			// 清掉上一次残留
 			if (this.courseDrag && this.courseDrag.longPressTimer) {
 				clearTimeout(this.courseDrag.longPressTimer)
@@ -990,15 +1268,22 @@ export default {
 			const colPx = w ? (w - timeColPx) / 7 : 0
 			const drag = {
 				courseId: course.id,
+				course: { ...course },
 				startX: touch.clientX,
 				startY: touch.clientY,
+				currentX: touch.clientX,
+				currentY: touch.clientY,
 				dx: 0,
 				dy: 0,
+				originWeek: this.selectedWeek,
+				targetWeek: this.selectedWeek,
 				originDay: dayIndex + 1,
 				originStart: course.startPeriod,
 				span: course.endPeriod - course.startPeriod + 1,
 				cellPx,
 				colPx,
+				scrollCompensationPx: 0,
+				fromStash: false,
 				active: false,
 				suppressClick: false,
 				longPressTimer: null
@@ -1007,79 +1292,300 @@ export default {
 				if (this.courseDrag && this.courseDrag.courseId === course.id) {
 					this.courseDrag.active = true
 					this.courseDrag.suppressClick = true
+					this.courseDragLastTouch = { clientX: this.courseDrag.currentX, clientY: this.courseDrag.currentY }
+					this.startCourseDragAutoScroll()
 					try { uni.vibrateShort && uni.vibrateShort({ type: 'medium' }) } catch (err) {}
 				}
 			}, 400)
 			this.courseDrag = drag
 		},
 		onCourseTouchMove(e) {
-			if (!this.courseDrag) return
+			if (!this.courseDrag) {
+				this.onSwipeMove(e)
+				return
+			}
 			const touch = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0])
 			if (!touch) return
+			const scrollComp = this.courseDrag.scrollCompensationPx || 0
 			const dx = touch.clientX - this.courseDrag.startX
-			const dy = touch.clientY - this.courseDrag.startY
-			// 未激活长按前：如果手指明显移动，取消长按定时器（视为滑动/滚动，不进入拖拽）
+			// 有效 dy = 触摸位移 + 滚动补偿，保证 ghost 与课表内容相对位置一致
+			const dy = touch.clientY - this.courseDrag.startY + scrollComp
+			// 未激活长按前：横向滑动优先切周，纵向滚动/轻微移动取消长按
 			if (!this.courseDrag.active) {
-				if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+				if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
 					if (this.courseDrag.longPressTimer) {
 						clearTimeout(this.courseDrag.longPressTimer)
 						this.courseDrag.longPressTimer = null
 					}
+					if (Math.abs(dx) > Math.abs(dy) * 1.2) {
+						this.courseDrag.suppressClick = true
+						this.onSwipeMove(e)
+						return
+					}
 					this.courseDrag = null
+					this.onSwipeMove(e)
 				}
 				return
 			}
+			this.swipeTracking = false
+			this.swipeOffset = 0
 			// 激活后：跟随手指移动
-			this.courseDrag = { ...this.courseDrag, dx, dy }
+			this.courseDrag = {
+				...this.courseDrag,
+				currentX: touch.clientX,
+				currentY: touch.clientY,
+				dx,
+				dy
+			}
+			this.courseDragLastTouch = { clientX: touch.clientX, clientY: touch.clientY }
+			this.startCourseDragAutoScroll()
+			this.maybeAutoScrollDuringCourseDrag(touch)
 		},
-		onCourseTouchEnd() {
-			if (!this.courseDrag) return
+		onCourseTouchEnd(e) {
+			const shouldFinishSwipe = this.swipeTracking || this.swipeOffset !== 0 || this.swipeFramePending
+			if (!this.courseDrag) {
+				if (shouldFinishSwipe) this.onSwipeEnd(e)
+				return
+			}
 			if (this.courseDrag.longPressTimer) {
 				clearTimeout(this.courseDrag.longPressTimer)
 				this.courseDrag.longPressTimer = null
 			}
+			this.stopCourseDragAutoScroll()
 			if (!this.courseDrag.active) {
-				// 没有进入拖拽状态：不做任何修改，让 click 自然触发详情
-				this.courseDrag = null
+				const suppressClick = !!this.courseDrag.suppressClick
+				if (shouldFinishSwipe) this.onSwipeEnd(e)
+				this.courseDrag = suppressClick ? { ...this.courseDrag, suppressClick: true } : null
 				return
 			}
-			// 计算目标 day / period
-			const { courseId, dx, dy, originDay, originStart, span, cellPx, colPx } = this.courseDrag
+			const { courseId, currentX, dx, dy, originWeek, originDay, originStart, span, cellPx, colPx, fromStash, course } = this.courseDrag
+			// 检测是否拖入临时存放点区域（左下角）
+			if (this.isTouchInTempStashZone(currentX, this.courseDrag.currentY)) {
+				this.dropCourseToStash(course, originWeek, fromStash)
+				this.courseDrag = { ...this.courseDrag, dx: 0, dy: 0, active: false }
+				return
+			}
+			// 计算目标 week / day / period
+			const finalWeek = this.selectedWeek || originWeek
 			let targetDay = originDay
 			let targetStart = originStart
-			if (colPx > 0) {
+			if (colPx > 0 && currentX) {
+				const w = this.swipeViewportWidth || this.getViewportWidth()
+				const timeColPx = w ? (w / 750) * 80 : 0
+				const dayX = currentX - timeColPx
+				targetDay = Math.min(7, Math.max(1, Math.floor(dayX / colPx) + 1))
+			} else if (colPx > 0) {
 				const dCol = dx >= 0 ? Math.floor(dx / colPx + 0.5) : Math.ceil(dx / colPx - 0.5)
 				targetDay = Math.min(7, Math.max(1, originDay + dCol))
 			}
 			if (cellPx > 0) {
-				const dRow = dy >= 0 ? Math.floor(dy / cellPx + 0.5) : Math.ceil(dy / cellPx - 0.5)
-				targetStart = Math.min(this.totalPeriods - span + 1, Math.max(1, originStart + dRow))
+				if (fromStash && this.courseDrag.currentY) {
+					const scheduleY = this.courseDrag.currentY - this.getScheduleScrollTopOffset() + (this.scheduleScrollTopApplied || 0)
+					const row = Math.floor(scheduleY / cellPx) + 1
+
+					targetStart = Math.min(this.totalPeriods - span + 1, Math.max(1, row))
+				} else {
+					const dRow = dy >= 0 ? Math.floor(dy / cellPx + 0.5) : Math.ceil(dy / cellPx - 0.5)
+					targetStart = Math.min(this.totalPeriods - span + 1, Math.max(1, originStart + dRow))
+				}
 			}
+
 			// 落回原位则不持久化
-			if (targetDay === originDay && targetStart === originStart) {
+			if (finalWeek === originWeek && targetDay === originDay && targetStart === originStart && !fromStash) {
 				this.courseDrag = { ...this.courseDrag, dx: 0, dy: 0, active: false }
 				// 留 suppressClick 让本次 click 被吃掉
 				return
 			}
-			// 应用变更：允许重叠，不做冲突检测
-			const list = loadCourses()
-			const idx = list.findIndex(c => c.id === courseId)
-			if (idx >= 0) {
-				const target = { ...list[idx] }
-				target.dayOfWeek = targetDay
-				target.startPeriod = targetStart
-				target.endPeriod = targetStart + span - 1
-				target.jcText = `${target.startPeriod}-${target.endPeriod}`
-				list[idx] = target
-				saveCourses(list)
-				this.courses = list
+			if (fromStash) {
+				// 从存放点拖出：从 stash 移除并写入课表目标位置
+				this.removeCourseFromStash(courseId)
+				this.placeCourseFromStash(course, finalWeek, targetDay, targetStart, span)
+				this.tempStashExpanded = false
+			} else {
+				// 从课表拖到课表：多周课程只拆出原周，移动后的课程写入目标周
+				const list = loadCourses()
+				const idx = list.findIndex(c => c.id === courseId)
+				if (idx >= 0) {
+					const source = { ...list[idx] }
+					const sourceWeeks = Array.isArray(source.weeks) ? source.weeks.slice() : []
+					const movedCourse = {
+						...source,
+						id: `${source.id || 'course'}_move_${originWeek}_${finalWeek}_${Date.now()}`,
+						dayOfWeek: targetDay,
+						startPeriod: targetStart,
+						endPeriod: targetStart + span - 1,
+						weeks: [finalWeek],
+						weekText: `${finalWeek}周`,
+						jcText: `${targetStart}-${targetStart + span - 1}`,
+						manual: true
+					}
+					if (sourceWeeks.length <= 1) {
+						list[idx] = movedCourse
+					} else {
+						const remainingWeeks = sourceWeeks.filter(week => week !== originWeek)
+						list[idx] = {
+							...source,
+							weeks: remainingWeeks,
+							weekText: this.formatWeeksText(remainingWeeks) || source.weekText
+						}
+						list.push(movedCourse)
+					}
+					this.selectedWeek = finalWeek
+					this.applyScheduleCourses(list)
+				}
 			}
-			// 拖拽落点后，重叠分组可能变化，刷新闪烁时钟
-			this.__overlapMapCache = null
-			this.__overlapMapCacheKey = ''
-			this.startBlinkTimerIfNeeded()
 			// 保持 suppressClick = true，避免松手时 click 触发详情
 			this.courseDrag = { ...this.courseDrag, dx: 0, dy: 0, active: false }
+		},
+		// === 临时存放点 ===
+		// 判断触摸点是否落在临时存放点区域（收起态：左下角圆形；展开态：底部全宽条带）
+		isTouchInTempStashZone(x, y) {
+			if (!this.courseDrag || !this.courseDrag.active) return false
+			let h = 0
+			try { h = uni.getSystemInfoSync().windowHeight || 0 } catch (e) {}
+			if (!h) return false
+			const w = this.swipeViewportWidth || this.getViewportWidth() || 375
+			const rpxToPx = w / 750
+			// 收起态：左下角 180rpx × 180rpx 圆形气泡区域
+			if (!this.tempStashExpanded) {
+				const zoneX = 180 * rpxToPx
+				const zoneY = h - 180 * rpxToPx
+				return x <= zoneX && y >= zoneY
+			}
+			// 展开态：底部全宽条带（left/right 各留 24rpx，高度约 140rpx 含 padding）
+			const padX = 24 * rpxToPx
+			const barHeight = 140 * rpxToPx
+			const zoneY = h - barHeight
+			return x >= padX && x <= (w - padX) && y >= zoneY
+		},
+		// 把课程放入临时存放点（从课表移除该周的该课，存入 stash）
+		dropCourseToStash(course, originWeek, fromStash) {
+			if (!course) return
+			if (fromStash) {
+				// 已在 stash，放回原处（不做处理）
+				return
+			}
+			const list = loadCourses()
+			const idx = list.findIndex(c => c.id === course.id)
+			if (idx < 0) {
+				uni.showToast({ title: '课程未找到', icon: 'none' })
+				return
+			}
+			const source = { ...list[idx] }
+			const sourceWeeks = Array.isArray(source.weeks) ? source.weeks.slice() : []
+			// 存放点保存的课程快照（仅当前周的有效信息）
+			const stashCourse = {
+				...source,
+				weeks: [originWeek],
+				weekText: `${originWeek}周`
+			}
+			// 从原课程移除该周
+			if (sourceWeeks.length <= 1) {
+				list.splice(idx, 1)
+			} else {
+				const remainingWeeks = sourceWeeks.filter(week => week !== originWeek)
+				list[idx] = {
+					...source,
+					weeks: remainingWeeks,
+					weekText: this.formatWeeksText(remainingWeeks) || source.weekText
+				}
+			}
+			this.applyScheduleCourses(list)
+			this.tempStash.push({ course: stashCourse, originWeek })
+			this.persistTempStash()
+			this.tempStashExpanded = false
+			uni.showToast({ title: '已放入存放点', icon: 'none' })
+		},
+		// 从存放点拖出：放置到目标周/天/节
+		placeCourseFromStash(stashCourse, week, day, startPeriod, span) {
+			const list = loadCourses()
+			const movedCourse = {
+				...stashCourse,
+				id: `${stashCourse.id || 'course'}_stash_${week}_${day}_${startPeriod}_${Date.now()}`,
+				dayOfWeek: day,
+				startPeriod,
+				endPeriod: startPeriod + span - 1,
+				weeks: [week],
+				weekText: `${week}周`,
+				jcText: `${startPeriod}-${startPeriod + span - 1}`,
+				manual: true
+			}
+			list.push(movedCourse)
+			this.selectedWeek = week
+			this.applyScheduleCourses(list)
+			uni.showToast({ title: '已放回课表', icon: 'success' })
+		},
+		removeCourseFromStash(courseId) {
+			const idx = this.tempStash.findIndex(item => item.course && item.course.id === courseId)
+			if (idx >= 0) {
+				this.tempStash.splice(idx, 1)
+				this.persistTempStash()
+			}
+		},
+		persistTempStash() {
+			try {
+				uni.setStorageSync('schedule_temp_stash', this.tempStash.slice())
+			} catch (e) {}
+		},
+		loadTempStash() {
+			try {
+				const saved = uni.getStorageSync('schedule_temp_stash')
+				this.tempStash = Array.isArray(saved) ? saved : []
+			} catch (e) {
+				this.tempStash = []
+			}
+		},
+		// 长按存放点课程芯片启动拖出
+		onStashItemTouchStart(stashItem, e) {
+			const touch = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0])
+			if (!touch) return
+			if (this.courseDrag && this.courseDrag.longPressTimer) {
+				clearTimeout(this.courseDrag.longPressTimer)
+			}
+			const cellPx = this.getPendingCellHeightPx()
+			let w = this.swipeViewportWidth || 0
+			if (!w) {
+				try { w = uni.getSystemInfoSync().windowWidth || 0 } catch (err) {}
+			}
+			const timeColPx = w ? (w / 750) * 80 : 0
+			const colPx = w ? (w - timeColPx) / 7 : 0
+			const course = stashItem.course
+			const drag = {
+				courseId: course.id,
+				course: { ...course },
+				startX: touch.clientX,
+				startY: touch.clientY,
+				currentX: touch.clientX,
+				currentY: touch.clientY,
+				dx: 0,
+				dy: 0,
+				originWeek: stashItem.originWeek || this.selectedWeek,
+				targetWeek: this.selectedWeek,
+				originDay: course.dayOfWeek,
+				originStart: course.startPeriod,
+				span: course.endPeriod - course.startPeriod + 1,
+				cellPx,
+				colPx,
+				scrollCompensationPx: 0,
+				fromStash: true,
+				active: false,
+				suppressClick: false,
+				longPressTimer: null
+			}
+		drag.longPressTimer = setTimeout(() => {
+			if (this.courseDrag && this.courseDrag.courseId === course.id) {
+				this.courseDrag.active = true
+				this.courseDrag.suppressClick = true
+				// 拖动期间保持 stash 展开态，避免 chip 从 DOM 移除导致触摸中断（卡在空中）
+				this.courseDragLastTouch = { clientX: this.courseDrag.currentX, clientY: this.courseDrag.currentY }
+				this.startCourseDragAutoScroll()
+				try { uni.vibrateShort && uni.vibrateShort({ type: 'medium' }) } catch (err) {}
+			}
+		}, 400)
+			this.courseDrag = drag
+		},
+		toggleTempStash() {
+			this.tempStashExpanded = !this.tempStashExpanded
 		},
 		// 点击空白格子：第一次点出现待新增标记，再次点击该范围内的格子则打开新增面板
 		onCellTap(dayIndex, period) {
@@ -1174,7 +1680,7 @@ export default {
 			if (!this.pendingSlot) return
 			this.addPanelMode = 'pick'
 			this.courseSearch = ''
-			this.createForm = { subject: '', teacher: '', location: '', applyAllWeeks: true }
+			this.createForm = { subject: '', teacher: '', location: '', weekMode: 'current' }
 			this.showAddPanel = true
 		},
 		closeAddPanel() {
@@ -1189,9 +1695,9 @@ export default {
 				subject: item.subject,
 				teacher: item.teacher,
 				location: item.location,
-				color: item.color || pickCourseColor(item.subject),
-				applyAllWeeks: false
-			})
+			color: item.color || pickCourseColor(item.subject),
+			weekMode: 'current'
+		})
 		},
 		// 提交"快捷新建"
 		submitCreateForm() {
@@ -1204,20 +1710,33 @@ export default {
 				subject,
 				teacher: `${this.createForm.teacher || ''}`.trim(),
 				location: `${this.createForm.location || ''}`.trim(),
-				color: pickCourseColor(subject),
-				applyAllWeeks: !!this.createForm.applyAllWeeks
-			})
+			color: pickCourseColor(subject),
+			weekMode: this.createForm.weekMode || 'current'
+		})
 		},
-		commitNewCourse({ subject, teacher, location, color, applyAllWeeks }) {
+		commitNewCourse({ subject, teacher, location, color, weekMode }) {
 			if (!this.pendingSlot) return
 			const { dayIndex, startPeriod, endPeriod } = this.pendingSlot
 			const dayOfWeek = dayIndex + 1
-			const weeks = applyAllWeeks
-				? Array.from({ length: this.totalWeeks }, (_, i) => i + 1)
-				: [this.selectedWeek]
-			const weekText = applyAllWeeks
-				? `1-${this.totalWeeks}周`
-				: `${this.selectedWeek}周`
+			const mode = weekMode || 'all'
+			let weeks, weekText
+			if (mode === 'current') {
+				weeks = [this.selectedWeek]
+				weekText = `第${this.selectedWeek}周`
+			} else if (mode === 'odd') {
+				weeks = []
+				for (let w = 1; w <= this.totalWeeks; w += 2) weeks.push(w)
+				const last = weeks.length ? weeks[weeks.length - 1] : 1
+				weekText = `单周(1-${last})`
+			} else if (mode === 'even') {
+				weeks = []
+				for (let w = 2; w <= this.totalWeeks; w += 2) weeks.push(w)
+				const last = weeks.length ? weeks[weeks.length - 1] : 2
+				weekText = `双周(2-${last})`
+			} else {
+				weeks = Array.from({ length: this.totalWeeks }, (_, i) => i + 1)
+				weekText = `1-${this.totalWeeks}周`
+			}
 			const id = `manual_${Date.now()}_${dayOfWeek}_${startPeriod}`
 			const newCourse = {
 				id,
@@ -1236,8 +1755,7 @@ export default {
 			}
 			const list = loadCourses()
 			list.push(newCourse)
-			saveCourses(list)
-			this.courses = list
+			this.applyScheduleCourses(list)
 			this.showAddPanel = false
 			this.pendingSlot = null
 			uni.showToast({ title: '已添加', icon: 'success' })
@@ -1267,6 +1785,20 @@ export default {
 				return 0
 			}
 		},
+		setSwipeOffset(offset) {
+			this.swipeFrameOffset = offset
+			if (this.swipeFramePending) return
+			this.swipeFramePending = true
+			const apply = () => {
+				this.swipeFramePending = false
+				this.swipeOffset = this.swipeFrameOffset
+			}
+			if (typeof requestAnimationFrame === 'function') {
+				requestAnimationFrame(apply)
+			} else {
+				setTimeout(apply, 16)
+			}
+		},
 		onSwipeStart(e) {
 			const touch = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0])
 			if (!touch) return
@@ -1278,6 +1810,8 @@ export default {
 			this.swipeStartX = touch.clientX
 			this.swipeStartY = touch.clientY
 			this.swipeOffset = 0
+			this.swipeTransitionProgress = 0
+			this.swipeFading = false
 			this.swipeAxisLocked = false
 			this.swipeTracking = true
 			if (!this.swipeViewportWidth) {
@@ -1305,7 +1839,7 @@ export default {
 			// 边界：第一周不让向右拖出，最后一周不让向左拖出（加阻尼）
 			if (this.selectedWeek <= 1 && offset > 0) offset = offset * 0.3
 			if (this.selectedWeek >= this.totalWeeks && offset < 0) offset = offset * 0.3
-			this.swipeOffset = offset
+			this.setSwipeOffset(offset)
 		},
 		onSwipeEnd() {
 			if (!this.swipeTracking) {
@@ -1313,6 +1847,9 @@ export default {
 				return
 			}
 			this.swipeTracking = false
+			if (this.swipeFramePending) {
+				this.swipeOffset = this.swipeFrameOffset
+			}
 			const w = this.swipeViewportWidth || 0
 			const threshold = w / 10
 			const offset = this.swipeOffset
@@ -1327,18 +1864,35 @@ export default {
 				this.springBack()
 			}
 		},
-		// 切到下一/上一周：先把 track 平滑动到目标位置，动画结束后再换 selectedWeek 并瞬移回中心
+		// 切到下一/上一周：根据当前拖拽距离决定动画剩余时长，减少松手后的顿挫感
 		commitSwipe(direction) {
 			const w = this.swipeViewportWidth || 0
+			const startOffset = this.swipeFramePending ? this.swipeFrameOffset : this.swipeOffset
+			const rawDistance = w > 0 ? Math.abs(startOffset) : 0
+			const progress = w > 0 ? Math.min(1, rawDistance / w) : 1
+			const duration = Math.max(70, Math.min(this.swipeAnimationMs, Math.round(70 + (1 - progress) * 80)))
 			this.swipeAnimating = true
+			this.swipeFading = true
 			this.swipePendingDirection = direction
+			this.swipeTransitionProgress = progress
+			this.swipeCurrentAnimationMs = duration
 			this.swipeOffset = direction > 0 ? -w : w
+			const finishProgress = () => {
+				if (this.swipeAnimating && this.swipePendingDirection === direction) {
+					this.swipeTransitionProgress = 1
+				}
+			}
+			if (typeof requestAnimationFrame === 'function') {
+				requestAnimationFrame(finishProgress)
+			} else {
+				setTimeout(finishProgress, 16)
+			}
 			if (this.swipeCommitTimer) {
 				clearTimeout(this.swipeCommitTimer)
 			}
 			this.swipeCommitTimer = setTimeout(() => {
 				this.finalizePendingCommit()
-			}, 230)
+			}, duration)
 		},
 		// 结束当前的切换/回弹动画：立刻提交方向并把 track 瞬移回中心位置
 		finalizePendingCommit() {
@@ -1349,7 +1903,10 @@ export default {
 			const direction = this.swipePendingDirection
 			this.swipePendingDirection = 0
 			this.swipeAnimating = false
+			this.swipeFading = false
 			this.swipeOffset = 0
+			this.swipeTransitionProgress = 0
+			this.swipeCurrentAnimationMs = this.swipeAnimationMs
 			if (direction > 0) {
 				this.nextWeek()
 				this.pendingSlot = null
@@ -1360,7 +1917,10 @@ export default {
 		},
 		springBack() {
 			this.swipeAnimating = true
+			this.swipeFading = false
 			this.swipePendingDirection = 0
+			this.swipeTransitionProgress = 0
+			this.swipeCurrentAnimationMs = this.swipeAnimationMs
 			this.swipeOffset = 0
 			if (this.swipeCommitTimer) {
 				clearTimeout(this.swipeCommitTimer)
@@ -1368,7 +1928,8 @@ export default {
 			this.swipeCommitTimer = setTimeout(() => {
 				this.swipeCommitTimer = null
 				this.swipeAnimating = false
-			}, 230)
+				this.swipeTransitionProgress = 0
+			}, this.swipeCurrentAnimationMs)
 		},
 		selectWeek(week) {
 			this.selectedWeek = week
@@ -1650,7 +2211,6 @@ export default {
 			this.webImportError = ''
 			this.webImportStatus = '请在内嵌网页中登录，并进入"个人课表查询"页面。'
 			this.showWebImport = true
-			return
 			// #endif
 
 			// #ifndef APP-PLUS
@@ -1660,7 +2220,7 @@ export default {
 				content: '当前平台暂不支持自动导入，请在网页端或 Android App 中使用。',
 				showCancel: false
 			})
-			return
+			if (!this.showWebImport) return
 			// #endif
 			// #endif
 
@@ -2268,7 +2828,7 @@ export default {
 	width: 100%;
 	overflow: hidden;
 	position: relative;
-	background: #ffffff;
+	background: transparent;
 }
 
 .swipe-track {
@@ -2276,6 +2836,8 @@ export default {
 	flex-direction: row;
 	height: 100%;
 	will-change: transform;
+	transform: translate3d(0, 0, 0);
+	backface-visibility: hidden;
 }
 
 .swipe-page {
@@ -2284,19 +2846,23 @@ export default {
 	flex-direction: column;
 	height: 100%;
 	box-sizing: border-box;
+	contain: layout paint;
+	will-change: opacity, transform;
+	transform: translate3d(0, 0, 0);
+	backface-visibility: hidden;
 }
 
 .schedule-scroll {
 	flex: 1;
 	min-height: 0;
 	height: auto;
-	background: #ffffff;
+	background: transparent;
 }
 
 .header-row {
 	display: flex;
 	flex-shrink: 0;
-	background: #ffffff;
+	background: transparent;
 	border-bottom: 2rpx solid #eef2f7;
 }
 
@@ -2423,6 +2989,8 @@ export default {
 	overflow: hidden;
 	box-sizing: border-box;
 	z-index: 5;
+	will-change: transform;
+	backface-visibility: hidden;
 	transition: transform 0.18s ease, box-shadow 0.18s ease;
 }
 
@@ -2435,6 +3003,139 @@ export default {
 
 .course-block.is-drag-origin {
 	opacity: 0.35;
+}
+
+.course-drag-ghost {
+	position: fixed;
+	z-index: 1000;
+	padding: 12rpx 8rpx;
+	border-radius: 16rpx;
+	color: #ffffff;
+	box-shadow: 0 14rpx 34rpx rgba(15, 23, 42, 0.34);
+	display: flex;
+	flex-direction: column;
+	gap: 6rpx;
+	overflow: hidden;
+	box-sizing: border-box;
+	pointer-events: none;
+	will-change: transform;
+	transform: translate3d(0, 0, 0);
+}
+
+.course-drag-capture {
+	position: fixed;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	z-index: 999;
+	background: transparent;
+}
+
+/* 临时存放点 */
+.temp-stash {
+	position: fixed;
+	left: 24rpx;
+	bottom: calc(40rpx + env(safe-area-inset-bottom));
+	z-index: 998;
+	display: flex;
+	align-items: flex-end;
+}
+
+.temp-stash.collapsed .temp-stash-bubble {
+	width: 96rpx;
+	height: 96rpx;
+	border-radius: 50%;
+	background: linear-gradient(135deg, #2f80ff, #6aa7ff);
+	box-shadow: 0 12rpx 32rpx rgba(41, 121, 255, 0.36);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	position: relative;
+}
+
+.temp-stash-icon {
+	width: 48rpx;
+	height: 48rpx;
+}
+
+.temp-stash-count {
+	position: absolute;
+	right: -6rpx;
+	top: -6rpx;
+	min-width: 32rpx;
+	height: 32rpx;
+	line-height: 32rpx;
+	padding: 0 8rpx;
+	border-radius: 999rpx;
+	background: #ef4444;
+	color: #fff;
+	font-size: 22rpx;
+	font-weight: 800;
+	text-align: center;
+	box-shadow: 0 4rpx 10rpx rgba(239, 68, 68, 0.36);
+}
+
+.temp-stash.expanded {
+	left: 24rpx;
+	right: 24rpx;
+	align-items: center;
+	background: #ffffff;
+	border-radius: 24rpx;
+	box-shadow: 0 16rpx 40rpx rgba(17, 24, 39, 0.16);
+	padding: 16rpx 16rpx 16rpx 20rpx;
+}
+
+.temp-stash-scroll {
+	flex: 1;
+	min-width: 0;
+	white-space: nowrap;
+}
+
+.temp-stash-row {
+	display: inline-flex;
+	align-items: center;
+	gap: 16rpx;
+	padding: 4rpx 0;
+}
+
+.temp-stash-chip {
+	flex-shrink: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 4rpx;
+	padding: 14rpx 20rpx;
+	border-radius: 16rpx;
+	color: #fff;
+	min-width: 140rpx;
+	box-shadow: 0 6rpx 16rpx rgba(15, 23, 42, 0.18);
+}
+
+.temp-stash-chip-name {
+	font-size: 26rpx;
+	font-weight: 800;
+	color: #fff;
+}
+
+.temp-stash-chip-week {
+	font-size: 20rpx;
+	color: rgba(255, 255, 255, 0.85);
+}
+
+.temp-stash-empty {
+	font-size: 26rpx;
+	color: #9ca3af;
+	padding: 16rpx 0;
+}
+
+.temp-stash-close {
+	flex-shrink: 0;
+	padding: 12rpx 20rpx;
+	border-radius: 999rpx;
+	background: #eef2f7;
+	color: #6b7280;
+	font-size: 24rpx;
+	font-weight: 700;
 }
 
 .pending-block {
@@ -2498,7 +3199,15 @@ export default {
 	overflow: visible;
 }
 
-.course-location,
+.course-location {
+	font-size: 18rpx;
+	line-height: 22rpx;
+	color: rgba(255, 255, 255, 0.86);
+	white-space: normal;
+	word-break: break-all;
+	overflow: visible;
+}
+
 .course-teacher {
 	font-size: 18rpx;
 	line-height: 22rpx;
@@ -2506,165 +3215,6 @@ export default {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-}
-
-.course-mask {
-	position: fixed;
-	left: 0;
-	right: 0;
-	top: 0;
-	bottom: 0;
-	z-index: 90;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	padding: 60rpx 32rpx;
-	box-sizing: border-box;
-	background: rgba(15, 23, 42, 0.45);
-}
-
-.course-card {
-	width: 100%;
-	border-radius: 28rpx;
-	background: #ffffff;
-	overflow: hidden;
-}
-
-.course-card-head {
-	position: relative;
-	padding: 28rpx 32rpx;
-	color: #ffffff;
-}
-
-.course-card-title {
-	display: block;
-	padding-right: 60rpx;
-	font-size: 34rpx;
-	font-weight: 800;
-	color: #ffffff;
-}
-
-.course-card-close {
-	position: absolute;
-	right: 18rpx;
-	top: 12rpx;
-	font-size: 50rpx;
-	color: rgba(255, 255, 255, 0.92);
-	line-height: 50rpx;
-}
-
-.course-card-body {
-	padding: 22rpx 32rpx 32rpx;
-}
-
-.course-row {
-	display: flex;
-	align-items: flex-start;
-	gap: 18rpx;
-	padding: 14rpx 0;
-	border-bottom: 1rpx solid #f1f5f9;
-}
-
-.course-row:last-child {
-	border-bottom: 0;
-}
-
-.course-label {
-	width: 110rpx;
-	font-size: 26rpx;
-	font-weight: 700;
-	color: #6b7280;
-	flex-shrink: 0;
-}
-
-.course-value {
-	flex: 1;
-	font-size: 26rpx;
-	color: #111827;
-	word-break: break-all;
-}
-
-.course-delete-btn {
-	margin-top: 24rpx;
-	width: 100%;
-	height: 82rpx;
-	line-height: 82rpx;
-	border-radius: 18rpx;
-	background: #fee2e2;
-	color: #ef4444;
-	font-size: 28rpx;
-	font-weight: 800;
-}
-
-.course-delete-btn::after {
-	border: 0;
-}
-
-.delete-options-mask {
-	position: fixed;
-	left: 0;
-	right: 0;
-	top: 0;
-	bottom: 0;
-	z-index: 110;
-	display: flex;
-	align-items: flex-end;
-	justify-content: center;
-	padding: 32rpx;
-	box-sizing: border-box;
-	background: rgba(15, 23, 42, 0.36);
-}
-
-.delete-options-card {
-	width: 100%;
-	padding: 28rpx;
-	border-radius: 28rpx;
-	background: #ffffff;
-	box-sizing: border-box;
-}
-
-.delete-options-title {
-	display: block;
-	font-size: 32rpx;
-	font-weight: 800;
-	color: #111827;
-	text-align: center;
-}
-
-.delete-options-subtitle {
-	display: block;
-	margin-top: 8rpx;
-	margin-bottom: 22rpx;
-	font-size: 24rpx;
-	color: #6b7280;
-	text-align: center;
-}
-
-.delete-option-btn {
-	margin-top: 14rpx;
-	width: 100%;
-	height: 82rpx;
-	line-height: 82rpx;
-	border-radius: 18rpx;
-	background: #f8fafc;
-	color: #111827;
-	font-size: 28rpx;
-	font-weight: 700;
-}
-
-.delete-option-btn.danger {
-	background: #fee2e2;
-	color: #ef4444;
-}
-
-.delete-option-btn.cancel {
-	margin-top: 20rpx;
-	background: #ffffff;
-	color: #6b7280;
-}
-
-.delete-option-btn::after {
-	border: 0;
 }
 
 .web-import-mask {
@@ -2996,6 +3546,36 @@ export default {
 .add-form-toggle-text {
 	font-size: 24rpx;
 	color: #4b5563;
+}
+
+.add-form-weekmode {
+	display: flex;
+	flex-direction: column;
+	gap: 12rpx;
+	padding: 6rpx 0 4rpx;
+}
+
+.week-mode-row {
+	display: flex;
+	gap: 12rpx;
+	flex-wrap: wrap;
+}
+
+.week-mode-chip {
+	flex: 1;
+	min-width: 120rpx;
+	padding: 16rpx 0;
+	border-radius: 14rpx;
+	background: #f4f6fb;
+	text-align: center;
+	font-size: 24rpx;
+	font-weight: 700;
+	color: #6b7280;
+}
+
+.week-mode-chip.active {
+	background: #2979ff;
+	color: #ffffff;
 }
 
 .add-form-submit {

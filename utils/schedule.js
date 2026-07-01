@@ -11,16 +11,24 @@ export const APPEARANCE_KEY = 'schedule_appearance'
 export const DEFAULT_PERIOD_CONFIG = {
 	classMinutes: 45,
 	breakMinutes: 10,
+	breakAfterMap: {
+		2: 30,
+		6: 20
+	},
 	morningStart: '08:00',
 	morningCount: 4,
 	afternoonStart: '13:40',
 	afternoonCount: 4,
 	eveningStart: '18:30',
-	eveningCount: 4
+	eveningCount: 4,
+	periodTimes: []
 }
 
 // 默认上课节次时间表（基于默认配置生成，用于显示）
 export const DEFAULT_PERIOD_TIMES = buildPeriodTimes(DEFAULT_PERIOD_CONFIG)
+
+export const WEEKDAY_NAMES = ['一', '二', '三', '四', '五', '六', '日']
+
 
 // 颜色池：稳定根据课程名分配
 const COLOR_POOL = [
@@ -42,64 +50,100 @@ export function pickCourseColor(name) {
 // 教务系统字段：kcmc 课程名称, jsxm 教师, cdmc 教室, xqj 星期(1-7), jcs "1-2"/"3-4", zcd "1-16周", zcmc "周次描述", kkbzsmc 备注
 export function normalizeCourseFromZf(item) {
 	if (!item) return null
-	const xqj = parseInt(item.xqj, 10)
-	const jcsRange = parseJcs(item.jcs)
+	const xqj = parseWeekday(item.xqj || item.xqjmc || item.xqmc)
+	const jcsRange = parseJcs(item.jcs || item.jc || item.jcor || item.ksjc || item.ksjcdm)
 	if (!xqj || !jcsRange) return null
-	const weeks = parseZcd(item.zcd)
-	const subject = `${item.kcmc || ''}`.trim() || '未命名课程'
+	const weekText = firstText(item.zcd, item.zcmc, item.skzcmc, item.zc, item.skzc)
+	const weeks = parseZcd(weekText)
+	const subject = firstText(item.kcmc, item.kcName, item.kcmcDisplay) || '未命名课程'
 	return {
-		id: `${item.kch_id || item.kch || ''}_${item.jxbmc || item.jxb_id || ''}_${xqj}_${jcsRange.start}`,
+		id: `${item.kch_id || item.kch || item.kcid || ''}_${item.jxbmc || item.jxb_id || item.jxbid || ''}_${xqj}_${jcsRange.start}`,
 		subject,
-		teacher: `${item.xm || item.jsxm || ''}`.trim(),
-		location: `${item.cdmc || ''}`.trim(),
+		teacher: firstText(item.xm, item.jsxm, item.jsmc, item.teacher),
+		location: firstText(item.cdmc, item.jxdd, item.jxddmc, item.croommc),
 		dayOfWeek: xqj,
 		startPeriod: jcsRange.start,
 		endPeriod: jcsRange.end,
 		weeks,
-		weekText: `${item.zcd || ''}`.trim(),
-		jcText: `${item.jc || item.jcs || ''}`.trim(),
-		note: `${item.kkbzsmc || ''}`.trim(),
+		weekText,
+		jcText: firstText(item.jc, item.jcs, item.jcor, item.ksjc, item.ksjcdm),
+		note: firstText(item.kkbzsmc, item.kcxzmc),
 		color: pickCourseColor(subject)
 	}
 }
 
-// 解析 "1-2" / "3-4" / "5" 节次范围
+function firstText(...values) {
+	for (const value of values) {
+		const text = `${value || ''}`.trim()
+		if (text) return text
+	}
+	return ''
+}
+
+function parseWeekday(value) {
+	const text = `${value || ''}`.trim()
+	const num = parseInt(text, 10)
+	if (num >= 1 && num <= 7) return num
+	const map = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 7, 天: 7 }
+	const match = text.match(/[一二三四五六日天]/)
+	return match ? map[match[0]] : 0
+}
+
+// 解析 "1-2" / "3-4" / "5" / "第5-8节" / "0508" 节次范围
 function parseJcs(jcs) {
 	if (!jcs) return null
 	const text = `${jcs}`
-	const match = text.match(/(\d+)\s*[-–]\s*(\d+)/)
-	if (match) {
-		return { start: parseInt(match[1], 10), end: parseInt(match[2], 10) }
+	const rangeMatches = Array.from(text.matchAll(/(\d+)\s*(?:[-–~至]|到)\s*(\d+)/g))
+	if (rangeMatches.length) {
+		const ranges = rangeMatches
+			.map(match => ({ start: parseInt(match[1], 10), end: parseInt(match[2], 10) }))
+			.filter(range => range.start > 0 && range.end >= range.start)
+		if (ranges.length) {
+			return ranges.sort((a, b) => (b.end - b.start) - (a.end - a.start))[0]
+		}
 	}
-	const single = parseInt(text, 10)
-	if (single > 0) return { start: single, end: single }
+	const compact = text.match(/^\s*(\d{2})(\d{2})\s*$/)
+	if (compact) {
+		const start = parseInt(compact[1], 10)
+		const end = parseInt(compact[2], 10)
+		if (start > 0 && end >= start) return { start, end }
+	}
+	const nums = text.match(/\d+/g)
+	if (nums && nums.length) {
+		const values = nums.map(n => parseInt(n, 10)).filter(n => n > 0 && n <= 30)
+		if (values.length >= 2) return { start: Math.min(...values), end: Math.max(...values) }
+		if (values.length === 1) return { start: values[0], end: values[0] }
+	}
 	return null
 }
 
-// 解析 "1-3,5,7-16周" / "1-16周" / "1,3,5周"
+// 解析 "1-3,5,7-16周" / "1-16周" / "1,3,5周" / "1-16周(单)"
 export function parseZcd(zcd) {
 	const result = new Set()
-	const text = `${zcd || ''}`.replace(/[周\s]/g, '')
-	if (!text) return []
-	text.split(/[,、]/).forEach(part => {
-		if (!part) return
-		const single = part.match(/^(\d+)$/)
-		if (single) {
-			result.add(parseInt(single[1], 10))
-			return
+	const text = `${zcd || ''}`
+	if (!text.trim()) return []
+	const normalized = text
+		.replace(/星期[一二三四五六日天]/g, '')
+		.replace(/[第节\s]/g, '')
+		.replace(/，/g, ',')
+		.replace(/、/g, ',')
+	let matched = false
+	const rangeReg = /(\d+)\s*[-–~至]\s*(\d+)\s*(?:周)?\s*(?:\(?\s*(单|双)\s*(?:周)?\s*\)?)?/g
+	let range
+	while ((range = rangeReg.exec(normalized))) {
+		matched = true
+		const from = parseInt(range[1], 10)
+		const to = parseInt(range[2], 10)
+		const filter = range[3]
+		for (let i = from; i <= to; i++) {
+			if (filter === '单' && i % 2 === 0) continue
+			if (filter === '双' && i % 2 !== 0) continue
+			result.add(i)
 		}
-		const range = part.match(/^(\d+)[-–](\d+)(单|双)?$/)
-		if (range) {
-			const from = parseInt(range[1], 10)
-			const to = parseInt(range[2], 10)
-			const filter = range[3]
-			for (let i = from; i <= to; i++) {
-				if (filter === '单' && i % 2 === 0) continue
-				if (filter === '双' && i % 2 !== 0) continue
-				result.add(i)
-			}
-		}
-	})
+	}
+	const nums = normalized.match(/\d+/g) || []
+	nums.map(n => parseInt(n, 10)).filter(n => n > 0 && n <= 30).forEach(n => result.add(n))
+	if (!matched && result.size === 0) return []
 	return Array.from(result).sort((a, b) => a - b)
 }
 
@@ -191,27 +235,62 @@ export function savePeriodConfig(config) {
 }
 
 export function mergePeriodConfig(config) {
-	const base = { ...DEFAULT_PERIOD_CONFIG }
+	const base = {
+		...DEFAULT_PERIOD_CONFIG,
+		breakAfterMap: { ...DEFAULT_PERIOD_CONFIG.breakAfterMap },
+		periodTimes: []
+	}
 	if (!config || typeof config !== 'object') return base
 	const next = { ...base }
 	if (isPositiveInt(config.classMinutes)) next.classMinutes = Number(config.classMinutes)
 	if (isNonNegativeInt(config.breakMinutes)) next.breakMinutes = Number(config.breakMinutes)
+	next.breakAfterMap = mergeBreakAfterMap(config.breakAfterMap, next.breakMinutes)
 	if (isTimeStr(config.morningStart)) next.morningStart = padTime(config.morningStart)
 	if (isNonNegativeInt(config.morningCount)) next.morningCount = Number(config.morningCount)
 	if (isTimeStr(config.afternoonStart)) next.afternoonStart = padTime(config.afternoonStart)
 	if (isNonNegativeInt(config.afternoonCount)) next.afternoonCount = Number(config.afternoonCount)
 	if (isTimeStr(config.eveningStart)) next.eveningStart = padTime(config.eveningStart)
 	if (isNonNegativeInt(config.eveningCount)) next.eveningCount = Number(config.eveningCount)
+	const total = next.morningCount + next.afternoonCount + next.eveningCount
+	if (Array.isArray(config.periodTimes)) {
+		next.periodTimes = normalizePeriodTimes(config.periodTimes, total)
+	}
 	return next
 }
+
+function mergeBreakAfterMap(map, fallbackBreakMinutes) {
+	const base = { ...DEFAULT_PERIOD_CONFIG.breakAfterMap }
+	if (map && typeof map === 'object' && !Array.isArray(map)) {
+		Object.keys(map).forEach(key => {
+			if (isNonNegativeInt(map[key])) base[Number(key)] = Number(map[key])
+		})
+	}
+	if (!isNonNegativeInt(base[2])) base[2] = 30
+	if (!isNonNegativeInt(base[6])) base[6] = 20
+	return base
+}
+
+function normalizePeriodTimes(times, total) {
+	return times.slice(0, total).map(item => {
+		if (!item || typeof item !== 'object') return null
+		const start = isTimeStr(item.start) ? padTime(item.start) : ''
+		const end = isTimeStr(item.end) ? padTime(item.end) : ''
+		return start && end ? { start, end } : null
+	}).filter(Boolean)
+}
+
 
 // 根据节次配置生成 [{ start, end }] 列表
 export function buildPeriodTimes(config) {
 	const cfg = mergePeriodConfig(config)
+	const total = getTotalPeriodCount(cfg)
+	if (Array.isArray(cfg.periodTimes) && cfg.periodTimes.length >= total) {
+		return cfg.periodTimes.slice(0, total)
+	}
 	const list = []
-	pushSession(list, cfg.morningStart, cfg.morningCount, cfg.classMinutes, cfg.breakMinutes)
-	pushSession(list, cfg.afternoonStart, cfg.afternoonCount, cfg.classMinutes, cfg.breakMinutes)
-	pushSession(list, cfg.eveningStart, cfg.eveningCount, cfg.classMinutes, cfg.breakMinutes)
+	pushSession(list, cfg.morningStart, cfg.morningCount, cfg.classMinutes, cfg.breakMinutes, cfg.breakAfterMap)
+	pushSession(list, cfg.afternoonStart, cfg.afternoonCount, cfg.classMinutes, cfg.breakMinutes, cfg.breakAfterMap)
+	pushSession(list, cfg.eveningStart, cfg.eveningCount, cfg.classMinutes, cfg.breakMinutes, cfg.breakAfterMap)
 	return list
 }
 
@@ -220,16 +299,182 @@ export function getTotalPeriodCount(config) {
 	return cfg.morningCount + cfg.afternoonCount + cfg.eveningCount
 }
 
-function pushSession(list, startTime, count, classMinutes, breakMinutes) {
+export function buildAutoPeriodTimes(config) {
+	const cfg = mergePeriodConfig({ ...config, periodTimes: [] })
+	const list = []
+	pushSession(list, cfg.morningStart, cfg.morningCount, cfg.classMinutes, cfg.breakMinutes, cfg.breakAfterMap)
+	pushSession(list, cfg.afternoonStart, cfg.afternoonCount, cfg.classMinutes, cfg.breakMinutes, cfg.breakAfterMap)
+	pushSession(list, cfg.eveningStart, cfg.eveningCount, cfg.classMinutes, cfg.breakMinutes, cfg.breakAfterMap)
+	return list
+}
+
+function pushSession(list, startTime, count, classMinutes, breakMinutes, breakAfterMap) {
 	if (!count || count <= 0) return
 	let cursor = parseTimeMinutes(startTime)
 	if (cursor === null) return
 	for (let i = 0; i < count; i++) {
+		const periodNo = list.length + 1
 		const start = cursor
 		const end = start + classMinutes
 		list.push({ start: minutesToTime(start), end: minutesToTime(end) })
-		cursor = end + breakMinutes
+		const currentBreak = breakAfterMap && isNonNegativeInt(breakAfterMap[periodNo]) ? Number(breakAfterMap[periodNo]) : breakMinutes
+		cursor = end + currentBreak
 	}
+}
+
+
+export function parseClockMinutes(text) {
+	return parseTimeMinutes(text)
+}
+
+export function minutesToClockTime(total) {
+	return minutesToTime(total)
+}
+
+export function getCourseDateTime(course, periodTimes, startOrEnd = 'start', baseDate = new Date()) {
+	if (!course) return null
+	const times = Array.isArray(periodTimes) ? periodTimes : buildPeriodTimes(loadPeriodConfig())
+	const period = startOrEnd === 'end' ? course.endPeriod : course.startPeriod
+	const time = times[period - 1]
+	if (!time) return null
+	const minutes = parseTimeMinutes(startOrEnd === 'end' ? time.end : time.start)
+	if (minutes === null) return null
+	const date = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate())
+	const today = date.getDay() || 7
+	const targetDay = Number(course.dayOfWeek) || today
+	let offset = targetDay - today
+	if (offset < 0) offset += 7
+	date.setDate(date.getDate() + offset)
+	date.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0)
+	return date
+}
+
+export function findCurrentOrRecentCourse(options = {}) {
+	const now = options.now || new Date()
+	const courses = Array.isArray(options.courses) ? options.courses : loadCourses()
+	const week = options.week || calcCurrentWeek(loadSemesterStartDate(), now)
+	const periodTimes = Array.isArray(options.periodTimes) ? options.periodTimes : buildPeriodTimes(loadPeriodConfig())
+	const recentMinutes = Number(options.recentMinutes) >= 0 ? Number(options.recentMinutes) : 20
+	const dayOfWeek = now.getDay() || 7
+	const currentMinutes = now.getHours() * 60 + now.getMinutes()
+	const todayCourses = courses
+		.filter(course => course && Number(course.dayOfWeek) === dayOfWeek && (!Array.isArray(course.weeks) || !course.weeks.length || course.weeks.includes(week)))
+		.sort((a, b) => a.startPeriod - b.startPeriod)
+	for (const course of todayCourses) {
+		const start = parseTimeMinutes((periodTimes[course.startPeriod - 1] || {}).start)
+		const end = parseTimeMinutes((periodTimes[course.endPeriod - 1] || {}).end)
+		if (start === null || end === null) continue
+		if (currentMinutes >= start && currentMinutes <= end + recentMinutes) {
+			return { course, periodTime: { start: minutesToTime(start), end: minutesToTime(end) }, status: currentMinutes <= end ? 'current' : 'recent' }
+		}
+	}
+	return null
+}
+
+export function findNextCourse(options = {}) {
+	const now = options.now || new Date()
+	const courses = Array.isArray(options.courses) ? options.courses : loadCourses()
+	const semesterStart = options.semesterStart || loadSemesterStartDate()
+	const periodTimes = Array.isArray(options.periodTimes) ? options.periodTimes : buildPeriodTimes(loadPeriodConfig())
+	const currentWeek = options.week || calcCurrentWeek(semesterStart, now)
+	let best = null
+	for (let dayOffset = 0; dayOffset <= 14; dayOffset++) {
+		const date = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+		date.setDate(date.getDate() + dayOffset)
+		const dayOfWeek = date.getDay() || 7
+		const week = currentWeek + Math.floor((dayOfWeek < (now.getDay() || 7) ? dayOffset + 7 : dayOffset) / 7)
+		courses.forEach(course => {
+			if (!course || Number(course.dayOfWeek) !== dayOfWeek) return
+			if (Array.isArray(course.weeks) && course.weeks.length && !course.weeks.includes(week)) return
+			const time = periodTimes[course.startPeriod - 1]
+			const minutes = parseTimeMinutes(time && time.start)
+			if (minutes === null) return
+			const startAt = new Date(date)
+			startAt.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0)
+			if (startAt <= now) return
+			if (!best || startAt < best.startAt) best = { course, startAt, week, periodTime: time }
+		})
+		if (best) return best
+	}
+	return null
+}
+
+export function formatCoursePoint(info) {
+	if (!info || !info.course || !info.startAt) return ''
+	const date = info.startAt
+	const md = `${date.getMonth() + 1}月${date.getDate()}日`
+	return `${md}周${WEEKDAY_NAMES[(Number(info.course.dayOfWeek) || 1) - 1]}第${info.course.startPeriod}-${info.course.endPeriod}节 ${info.course.subject || '课程'}`
+}
+
+// 查找指定学科的下一次上课时间
+export function findNextCourseForSubject(subject, options = {}) {
+	const now = options.now || new Date()
+	const courses = Array.isArray(options.courses) ? options.courses : loadCourses()
+	const semesterStart = options.semesterStart || loadSemesterStartDate()
+	const periodTimes = Array.isArray(options.periodTimes) ? options.periodTimes : buildPeriodTimes(loadPeriodConfig())
+	const currentWeek = options.week || calcCurrentWeek(semesterStart, now)
+	const searchDays = Number.isInteger(Number(options.searchDays)) && Number(options.searchDays) > 0 ? Number(options.searchDays) : 210
+	let best = null
+	for (let dayOffset = 0; dayOffset <= searchDays; dayOffset++) {
+		const date = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+		date.setDate(date.getDate() + dayOffset)
+		const dayOfWeek = date.getDay() || 7
+		const week = currentWeek + Math.floor((dayOfWeek < (now.getDay() || 7) ? dayOffset + 7 : dayOffset) / 7)
+		courses.forEach(course => {
+			if (!course || Number(course.dayOfWeek) !== dayOfWeek) return
+			if ((course.subject || '').trim() !== (subject || '').trim()) return
+			if (Array.isArray(course.weeks) && course.weeks.length && !course.weeks.includes(week)) return
+			const time = periodTimes[course.startPeriod - 1]
+			const minutes = parseTimeMinutes(time && time.start)
+			if (minutes === null) return
+			const startAt = new Date(date)
+			startAt.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0)
+			if (startAt <= now) return
+			if (!best || startAt < best.startAt) best = { course, startAt, week, periodTime: time }
+		})
+		if (best) return best
+	}
+	return null
+}
+
+// 根据指定的截止日期和时间，查找该时间点对应的课程（匹配到时间点在课程节次范围内即视为命中）
+export function findCourseAtDeadline(deadlineDate, deadlineTime, options = {}) {
+	if (!deadlineDate || !deadlineTime) return null
+	const courses = Array.isArray(options.courses) ? options.courses : loadCourses()
+	const semesterStart = options.semesterStart || loadSemesterStartDate()
+	const periodTimes = Array.isArray(options.periodTimes) ? options.periodTimes : buildPeriodTimes(loadPeriodConfig())
+	const deadline = new Date(`${deadlineDate}T${deadlineTime}:00`)
+	if (Number.isNaN(deadline.getTime())) return null
+	const dayOfWeek = deadline.getDay() || 7
+	const deadlineMinutes = deadline.getHours() * 60 + deadline.getMinutes()
+	const currentWeek = options.week || calcCurrentWeek(semesterStart, deadline)
+	const matching = courses.filter(course => {
+		if (!course || Number(course.dayOfWeek) !== dayOfWeek) return false
+		if (Array.isArray(course.weeks) && course.weeks.length && !course.weeks.includes(currentWeek)) return false
+		const start = periodTimes[course.startPeriod - 1]
+		const end = periodTimes[course.endPeriod - 1]
+		if (!start || !end) return false
+		const startMin = parseTimeMinutes(start.start)
+		const endMin = parseTimeMinutes(end.end)
+		if (startMin === null || endMin === null) return false
+		return deadlineMinutes >= startMin - 5 && deadlineMinutes <= endMin + 5
+	})
+	if (!matching.length) return null
+	// 优先返回截止时间正好在课程开始时间附近的
+	const exact = matching.find(c => {
+		const startMin = parseTimeMinutes(periodTimes[c.startPeriod - 1].start)
+		return startMin !== null && Math.abs(deadlineMinutes - startMin) <= 5
+	})
+	const course = exact || matching[0]
+	const startAt = new Date(deadline)
+	const startTime = periodTimes[course.startPeriod - 1]
+	if (startTime) {
+		const sm = parseTimeMinutes(startTime.start)
+		if (sm !== null) {
+			startAt.setHours(Math.floor(sm / 60), sm % 60, 0, 0)
+		}
+	}
+	return { course, startAt, week: currentWeek, periodTime: startTime }
 }
 
 function parseTimeMinutes(text) {
@@ -283,7 +528,8 @@ export const COURSE_COLOR_PRESETS = [
 	'#3b82f6', '#22c55e', '#f97316', '#a855f7', '#ec4899',
 	'#0ea5e9', '#14b8a6', '#ef4444', '#eab308', '#6366f1',
 	'#84cc16', '#06b6d4', '#f43f5e', '#10b981', '#8b5cf6',
-	'#0d9488', '#7c3aed', '#d946ef', '#f59e0b', '#64748b'
+	'#0d9488', '#7c3aed', '#d946ef', '#f59e0b', '#64748b',
+	'#be185d', '#9333ea', '#0f766e', '#b45309', '#475569'
 ]
 
 // 课程颜色覆盖（按课程名）：{ subject: '#xxxxxx' }
@@ -330,12 +576,20 @@ export function resolveCourseColor(subject, fallback, colorMap) {
 // 课表页外观配置
 export const DEFAULT_APPEARANCE = {
 	backgroundImage: '',
+	// 背景图配置更新时间，用于跨页面刷新和图片缓存失效
+	updatedAt: 0,
 	// 背景图透明度（0-1，越小越透）
 	backgroundOpacity: 1,
 	// 课程卡片透明度（0.3-1，整体卡片含色块）
 	cardOpacity: 1,
-	// 重叠课程闪烁切换周期（每节课的总停留时长，含淡入淡出，单位 ms）
-	// 范围 1000-10000，步长 500
+	// 重叠课程切换显示模式：'switch'（轮播闪烁，默认）/ 'overlap'（按学科顺序分层重叠）
+	overlapDisplayMode: 'switch',
+	// 重叠显示模式下的最低透明度（0-0.5，默认 0.1 = 10%）
+	overlapMinOpacity: 0.1,
+	// 重叠课程切换频率（每节课停留时长，含淡入淡出，单位 ms，默认 2000）
+	// 范围 1000-10000，步长 500。优先于废弃的 overlapBlinkCycleMs
+	overlapSwitchFrequency: 2000,
+	// [废弃] 保留兼容旧数据，新逻辑优先使用 overlapSwitchFrequency
 	overlapBlinkCycleMs: 5000
 }
 
@@ -355,19 +609,39 @@ export function mergeAppearance(config) {
 	if (!config || typeof config !== 'object') return base
 	const next = { ...base }
 	if (typeof config.backgroundImage === 'string') next.backgroundImage = config.backgroundImage
+	if (typeof config.updatedAt === 'number' && config.updatedAt > 0) next.updatedAt = config.updatedAt
 	if (typeof config.backgroundOpacity === 'number' && config.backgroundOpacity >= 0 && config.backgroundOpacity <= 1) {
 		next.backgroundOpacity = round2(config.backgroundOpacity)
 	}
 	if (typeof config.cardOpacity === 'number' && config.cardOpacity >= 0.3 && config.cardOpacity <= 1) {
 		next.cardOpacity = round2(config.cardOpacity)
 	}
+	// 重叠显示模式：仅接受 'switch' 或 'overlap'
+	if (config.overlapDisplayMode === 'switch' || config.overlapDisplayMode === 'overlap') {
+		next.overlapDisplayMode = config.overlapDisplayMode
+	}
+	// 最低透明度：0-0.5
+	if (typeof config.overlapMinOpacity === 'number' && config.overlapMinOpacity >= 0 && config.overlapMinOpacity <= 0.5) {
+		next.overlapMinOpacity = round2(config.overlapMinOpacity)
+	}
+	// 切换频率：1000-10000ms，取整到 500ms 步长
 	if (
+		typeof config.overlapSwitchFrequency === 'number' &&
+		config.overlapSwitchFrequency >= 1000 &&
+		config.overlapSwitchFrequency <= 10000
+	) {
+		next.overlapSwitchFrequency = Math.round(config.overlapSwitchFrequency / 500) * 500
+	}
+	// 兼容旧字段 overlapBlinkCycleMs（若 overlapSwitchFrequency 未设置则回退）
+	if (
+		!config.overlapSwitchFrequency &&
 		typeof config.overlapBlinkCycleMs === 'number' &&
 		config.overlapBlinkCycleMs >= 1000 &&
 		config.overlapBlinkCycleMs <= 10000
 	) {
-		// 取整到 500ms 步长
-		next.overlapBlinkCycleMs = Math.round(config.overlapBlinkCycleMs / 500) * 500
+		const legacy = Math.round(config.overlapBlinkCycleMs / 500) * 500
+		next.overlapBlinkCycleMs = legacy
+		next.overlapSwitchFrequency = next.overlapSwitchFrequency === 2000 && legacy !== 2000 ? legacy : next.overlapSwitchFrequency
 	}
 	return next
 }
